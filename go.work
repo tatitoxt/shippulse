@@ -1,0 +1,11 @@
+go 1.22
+
+use (
+	./packages/contracts
+	./packages/sdk
+	./services/control-plane
+	./services/ingest
+	./services/worker
+	./services/realtime
+	./agent/shippulse-agent
+)

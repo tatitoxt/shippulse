@@ -1,0 +1,38 @@
+# Binaries
+bin/
+*.exe
+*.exe;
+*.dll
+*.so
+*.dylib
+
+# Test coverage
+*.out
+*.meta
+coverage.txt
+
+# Node / Web dependencies
+node_modules/
+.next/
+out/
+build/
+dist/
+.cache/
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Environment & Secrets
+.env
+.env.local
+.env.production
+*.pem
+*.key
+
+# Local Data Storage
+data/
+tmp/
+*.log

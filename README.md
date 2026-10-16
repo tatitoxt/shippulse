@@ -2,6 +2,12 @@
 
 ShipPulse es un laboratorio de una plataforma para observar servicios y coordinar despliegues. El repositorio combina una interfaz web, servicios en Go y componentes de infraestructura local.
 
+```bash
+git clone https://github.com/tatitoxt/shippulse.git && cd shippulse
+docker compose up -d
+make build && make seed
+```
+
 ## Qué explora
 
 - Catálogo de servicios y dependencias.
@@ -12,14 +18,6 @@ ShipPulse es un laboratorio de una plataforma para observar servicios y coordina
 ## Arranque local
 
 Requiere Docker Compose, Go 1.22+ y Node.js 20+.
-
-```bash
-git clone https://github.com/tatitoxt/shippulse.git
-cd shippulse
-docker compose up -d
-make build
-make seed
-```
 
 Después se pueden iniciar el API y la interfaz en terminales separadas:
 

@@ -97,7 +97,8 @@ func TestCheckManualRollback(t *testing.T) {
 	}{
 		{"current succeeded", RollbackEligibility{Status: DeploymentSucceeded, PreviousVersion: "v1", IsCurrent: true}, true},
 		{"superseded succeeded", RollbackEligibility{Status: DeploymentSucceeded, PreviousVersion: "v1"}, false},
-		{"failed not restored", RollbackEligibility{Status: DeploymentFailed, PreviousVersion: "v1"}, true},
+		{"failed not restored", RollbackEligibility{Status: DeploymentFailed, PreviousVersion: "v1", StableUnchanged: true}, true},
+		{"failed but superseded", RollbackEligibility{Status: DeploymentFailed, PreviousVersion: "v1"}, false},
 		{"failed already restored", RollbackEligibility{Status: DeploymentFailed, PreviousVersion: "v1", RestoredAlready: true}, false},
 		{"no previous version", RollbackEligibility{Status: DeploymentSucceeded, IsCurrent: true}, false},
 		{"active rollback", RollbackEligibility{Status: DeploymentFailed, PreviousVersion: "v1", ActiveRollback: true}, false},

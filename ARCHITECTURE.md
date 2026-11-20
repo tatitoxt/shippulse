@@ -54,8 +54,9 @@ sequenceDiagram
 | A crashed worker's deploy is resumed, not repeated | lease expiry, reclaim, fencing by `lease_owner` | `TestClaimIsExclusiveAndExpiredLeasesAreReclaimed`, `TestWorkerResumesAfterCrashWithoutRepeatingCompletedSteps` |
 | One deploy at a time per service/environment | partial unique index on running deployments | `TestOnlyOneRunningDeploymentPerTarget` |
 | Failed health means the last stable version is restored | separate `rollback_operations` row, re-probe after restore | `TestUnhealthyAndTimeoutDeploymentsRollBackAutomatically`, E2E |
+| A rollback never overwrites a newer release | queued deploys wait for a pending rollback on the target; a rollback whose target was superseded is closed as `rollback_superseded`; failed deploys are only rollback-eligible while nothing newer was promoted | `TestQueuedDeploymentWaitsForPendingRollback`, `TestRollbackIsSupersededByANewerRelease`, `TestSupersededFailureIsNotRollbackEligible` |
 | A failed rollback is not reported as success | rollback status is independent of deployment status | `TestFailedRollbackIsNotReportedAsRolledBack` |
-| Tenants are isolated | every query filtered by `organization_id`; composite foreign keys | `TestTenantIsolation`, `TestTenantsCannotSeeEachOther`, E2E |
+| Tenants are isolated | every query filtered by `organization_id`; composite foreign keys; simulated runtimes keyed by organization id | `TestTenantIsolation`, `TestTenantsCannotSeeEachOther`, `TestRuntimesAreIsolatedPerTenant`, E2E |
 | Audit cannot be rewritten | trigger rejects `UPDATE`/`DELETE` on `audit_events` | `TestAuditEventsAreAppendOnly` |
 
 See [docs/spec/release-lifecycle.md](docs/spec/release-lifecycle.md) for states and API, and

@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/tatitoxt/shippulse/internal/domain"
 	"github.com/tatitoxt/shippulse/internal/migrate"
 	"github.com/tatitoxt/shippulse/internal/store"
@@ -269,5 +271,103 @@ func TestRollbackRequiresAPreviousStableVersion(t *testing.T) {
 	d, _, _ := s.CreateDeployment(ctx, input(tg, "v1.0.0", "k1"))
 	if _, _, err := s.RequestRollback(ctx, tg.Org, d.ID, "op", "rk", "why", "corr"); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("rollback of a queued first deployment: %v", err)
+	}
+}
+
+// start creates a deployment and drives it through claim and validation, the
+// state a worker is in right before it touches the runtime.
+func start(t *testing.T, s *store.Store, tg testutil.Target, version string) store.Deployment {
+	t.Helper()
+	ctx := context.Background()
+	d, _, err := s.CreateDeployment(ctx, input(tg, version, uuid.NewString()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, res, err := s.ClaimDeployment(ctx, d.ID, "w", time.Minute)
+	if err != nil || res != store.Claimed {
+		t.Fatalf("claim %s: %v %v", version, res, err)
+	}
+	d, err = s.ValidateTarget(ctx, d, "w")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func promote(t *testing.T, s *store.Store, tg testutil.Target, version string) store.Deployment {
+	t.Helper()
+	d := start(t, s, tg, version)
+	if err := s.Promote(context.Background(), d, "w"); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func TestQueuedDeploymentWaitsForPendingRollback(t *testing.T) {
+	s, tg := setup(t)
+	ctx := context.Background()
+	promote(t, s, tg, "v1")
+	bad := start(t, s, tg, "v2")
+	rb, err := s.Fail(ctx, bad, "w", store.Failure{Step: domain.StepHealthProbe, Code: domain.CodeHealthCheckFailed, Message: "x", Rollback: true})
+	if err != nil || rb == nil {
+		t.Fatalf("fail: %v %v", rb, err)
+	}
+	next, _, _ := s.CreateDeployment(ctx, input(tg, "v3", "next"))
+	if _, res, err := s.ClaimDeployment(ctx, next.ID, "w2", time.Minute); res != store.ClaimBusy || err != nil {
+		t.Fatalf("a newer release must wait for the pending rollback: %v %v", res, err)
+	}
+	claimed, res, err := s.ClaimRollback(ctx, rb.ID, "w", time.Minute)
+	if err != nil || res != store.Claimed {
+		t.Fatalf("claim rollback: %v %v", res, err)
+	}
+	if err := s.FinishRollback(ctx, claimed, "w", true, "", "restored"); err != nil {
+		t.Fatal(err)
+	}
+	if _, res, err := s.ClaimDeployment(ctx, next.ID, "w2", time.Minute); res != store.Claimed || err != nil {
+		t.Fatalf("release after rollback: %v %v", res, err)
+	}
+}
+
+func TestRollbackIsSupersededByANewerRelease(t *testing.T) {
+	s, tg := setup(t)
+	ctx := context.Background()
+	promote(t, s, tg, "v1")
+	d2 := promote(t, s, tg, "v2")
+	d3 := start(t, s, tg, "v3") // running when the rollback of v2 is requested
+	rb, _, err := s.RequestRollback(ctx, tg.Org, d2.ID, "operator@acme.example", "rk", "bad metrics", "corr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, res, err := s.ClaimRollback(ctx, rb.ID, "w", time.Minute); res != store.ClaimBusy || err != nil {
+		t.Fatalf("rollback must wait for the running deployment: %v %v", res, err)
+	}
+	if err := s.Promote(ctx, d3, "w"); err != nil {
+		t.Fatal(err)
+	}
+	if _, res, err := s.ClaimRollback(ctx, rb.ID, "w", time.Minute); res != store.ClaimDone || err != nil {
+		t.Fatalf("stale rollback must not run: %v %v", res, err)
+	}
+	got, _ := s.GetRollback(ctx, tg.Org, rb.ID)
+	if got.Status != "failed" || got.ErrorCode == nil || *got.ErrorCode != domain.CodeRollbackSuperseded {
+		t.Fatalf("rollback: %+v", got)
+	}
+	var current string
+	_ = s.Pool.QueryRow(ctx, `SELECT current_version FROM service_environments WHERE service_id = $1 AND environment_id = $2`, tg.Service, tg.Env).Scan(&current)
+	if current != "v3" {
+		t.Fatalf("newer release was overwritten: stable=%s", current)
+	}
+}
+
+func TestSupersededFailureIsNotRollbackEligible(t *testing.T) {
+	s, tg := setup(t)
+	ctx := context.Background()
+	promote(t, s, tg, "v1")
+	bad := start(t, s, tg, "v2")
+	if _, err := s.Fail(ctx, bad, "w", store.Failure{Step: domain.StepApplyVersion, Code: domain.CodeProviderUnavailable, Message: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	promote(t, s, tg, "v3")
+	if _, _, err := s.RequestRollback(ctx, tg.Org, bad.ID, "op", "rk", "why", "corr"); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("rolling back a superseded failure would overwrite v3: %v", err)
 	}
 }

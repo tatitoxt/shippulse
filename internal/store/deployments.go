@@ -265,20 +265,21 @@ func (s *Store) RequestRollback(ctx context.Context, org, deploymentID, actor, i
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	var (
-		status, version             string
-		prevVersion, prevDepID      *string
-		isCurrent, active, restored bool
+		status, version                        string
+		prevVersion, prevDepID                 *string
+		isCurrent, active, restored, unchanged bool
 	)
 	err = tx.QueryRow(ctx, `
 		SELECT d.status, d.version, d.previous_version, d.previous_deployment_id,
 			COALESCE(se.current_deployment_id = d.id, false),
 			EXISTS (SELECT 1 FROM rollback_operations r WHERE r.target_deployment_id = d.id AND r.status IN ('queued','running')),
-			EXISTS (SELECT 1 FROM rollback_operations r WHERE r.target_deployment_id = d.id AND r.status = 'succeeded')
+			EXISTS (SELECT 1 FROM rollback_operations r WHERE r.target_deployment_id = d.id AND r.status = 'succeeded'),
+			se.current_deployment_id IS NOT DISTINCT FROM d.previous_deployment_id
 		FROM deployments d
 		LEFT JOIN service_environments se ON se.service_id = d.service_id AND se.environment_id = d.environment_id
 		WHERE d.organization_id = $1 AND d.id = $2
 		FOR UPDATE OF d`, org, deploymentID).
-		Scan(&status, &version, &prevVersion, &prevDepID, &isCurrent, &active, &restored)
+		Scan(&status, &version, &prevVersion, &prevDepID, &isCurrent, &active, &restored, &unchanged)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Rollback{}, false, domain.ErrNotFound
 	}
@@ -291,7 +292,7 @@ func (s *Store) RequestRollback(ctx context.Context, org, deploymentID, actor, i
 	}
 	if err := domain.CheckManualRollback(domain.RollbackEligibility{
 		Status: domain.DeploymentStatus(status), PreviousVersion: prev,
-		IsCurrent: isCurrent, ActiveRollback: active, RestoredAlready: restored,
+		IsCurrent: isCurrent, ActiveRollback: active, RestoredAlready: restored, StableUnchanged: unchanged,
 	}); err != nil {
 		return Rollback{}, false, err
 	}

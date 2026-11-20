@@ -26,7 +26,9 @@ func seconds(d time.Duration) float64 { return d.Seconds() }
 
 // ClaimDeployment moves a queued deployment (or a running one whose lease
 // expired) to running under owner's lease. Duplicate deliveries of the same
-// job therefore execute at most one worker at a time.
+// job therefore execute at most one worker at a time. A queued deployment also
+// waits while a rollback on the same target is pending, so a rollback that was
+// requested first is never overtaken by a newer release.
 func (s *Store) ClaimDeployment(ctx context.Context, id, owner string, lease time.Duration) (Deployment, ClaimResult, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
@@ -41,7 +43,12 @@ func (s *Store) ClaimDeployment(ctx context.Context, id, owner string, lease tim
 		UPDATE deployments SET status = 'running', lease_owner = $2,
 			lease_expires_at = now() + make_interval(secs => $3), attempts = attempts + 1,
 			started_at = COALESCE(started_at, now())
-		WHERE id = $1 AND (status = 'queued' OR (status = 'running' AND lease_expires_at < now()))
+		WHERE id = $1 AND (
+			(status = 'running' AND lease_expires_at < now()) OR
+			(status = 'queued' AND NOT EXISTS (
+				SELECT 1 FROM rollback_operations r JOIN deployments t ON t.id = r.target_deployment_id
+				WHERE t.service_id = deployments.service_id AND t.environment_id = deployments.environment_id
+				  AND r.status IN ('queued', 'running'))))
 		RETURNING organization_id, correlation_id, attempts, (SELECT status FROM prev)`,
 		id, owner, seconds(lease)).Scan(&org, &corr, &attempts, &prevStatus)
 	if isUniqueViolation(err, "deployments_one_running_per_target") {
@@ -274,6 +281,10 @@ func (s *Store) ClaimRollback(ctx context.Context, id, owner string, lease time.
 			lease_expires_at = now() + make_interval(secs => $3), attempts = attempts + 1,
 			started_at = COALESCE(started_at, now())
 		WHERE id = $1 AND (status = 'queued' OR (status = 'running' AND lease_expires_at < now()))
+		  AND NOT EXISTS (
+			SELECT 1 FROM deployments t JOIN deployments x
+			  ON x.service_id = t.service_id AND x.environment_id = t.environment_id
+			WHERE t.id = rollback_operations.target_deployment_id AND x.status = 'running')
 		RETURNING `+rollbackColumns, id, owner, seconds(lease)))
 	if errors.Is(err, pgx.ErrNoRows) {
 		_ = tx.Rollback(ctx)
@@ -286,6 +297,34 @@ func (s *Store) ClaimRollback(ctx context.Context, id, owner string, lease time.
 	}
 	if err != nil {
 		return Rollback{}, ClaimBusy, fmt.Errorf("claim rollback: %w", err)
+	}
+	// The rollback is only valid while the target still runs what it was meant
+	// to undo: the rolled-back release itself (manual) or the stable release
+	// the failed deployment replaced (automatic). Otherwise a newer release
+	// was promoted in between and restoring would overwrite it.
+	var valid bool
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(se.current_deployment_id = t.id, false) OR COALESCE(se.current_deployment_id = $2::uuid, false)
+		FROM deployments t
+		LEFT JOIN service_environments se ON se.service_id = t.service_id AND se.environment_id = t.environment_id
+		WHERE t.id = $1`, rb.TargetDeploymentID, rb.RestoreDeploymentID).Scan(&valid); err != nil {
+		return Rollback{}, ClaimBusy, fmt.Errorf("check rollback target: %w", err)
+	}
+	if !valid {
+		out := "a newer release was promoted after this rollback was requested; nothing was changed"
+		if _, err := tx.Exec(ctx, `UPDATE rollback_operations SET status = 'failed', error_code = $2, safe_output = $3,
+			finished_at = now(), lease_owner = NULL, lease_expires_at = NULL WHERE id = $1`,
+			rb.ID, domain.CodeRollbackSuperseded, out); err != nil {
+			return Rollback{}, ClaimBusy, err
+		}
+		if err := insertAudit(ctx, tx, rb.OrganizationID, "worker:"+owner, "rollback.failed", "deployment", rb.TargetDeploymentID,
+			rb.CorrelationID, map[string]any{"rollback_id": rb.ID, "error_code": domain.CodeRollbackSuperseded, "output": out}); err != nil {
+			return Rollback{}, ClaimBusy, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return Rollback{}, ClaimBusy, err
+		}
+		return Rollback{}, ClaimDone, nil
 	}
 	if err := insertAudit(ctx, tx, rb.OrganizationID, "worker:"+owner, "rollback.started", "deployment", rb.TargetDeploymentID,
 		rb.CorrelationID, map[string]any{"rollback_id": rb.ID, "attempt": rb.Attempts, "to_version": rb.ToVersion}); err != nil {

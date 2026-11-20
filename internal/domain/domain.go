@@ -110,6 +110,7 @@ const (
 	CodeHealthCheckFailed   = "health_check_failed"
 	CodeHealthCheckTimeout  = "health_check_timeout"
 	CodeRollbackFailed      = "rollback_failed"
+	CodeRollbackSuperseded  = "rollback_superseded"
 	CodeTargetNotFound      = "target_not_found"
 )
 
@@ -161,6 +162,9 @@ type RollbackEligibility struct {
 	IsCurrent       bool // deployment is the promoted version of its target
 	ActiveRollback  bool
 	RestoredAlready bool // a rollback for this deployment already succeeded
+	// StableUnchanged: the target's stable release is still the one this
+	// deployment replaced, i.e. nothing was promoted after it.
+	StableUnchanged bool
 }
 
 func CheckManualRollback(e RollbackEligibility) error {
@@ -171,8 +175,10 @@ func CheckManualRollback(e RollbackEligibility) error {
 		return fmt.Errorf("%w: a rollback is already in progress", ErrConflict)
 	case e.Status == DeploymentSucceeded && e.IsCurrent:
 		return nil
-	case e.Status == DeploymentFailed && !e.RestoredAlready:
+	case e.Status == DeploymentFailed && !e.RestoredAlready && e.StableUnchanged:
 		return nil
+	case e.Status == DeploymentFailed && !e.StableUnchanged:
+		return fmt.Errorf("%w: a newer release was promoted after this deployment failed", ErrConflict)
 	default:
 		return fmt.Errorf("%w: deployment in status %s cannot be rolled back", ErrConflict, e.Status)
 	}

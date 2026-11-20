@@ -2,6 +2,8 @@ module github.com/tatitoxt/shippulse
 
 go 1.26.0
 
+toolchain go1.26.11
+
 require (
 	github.com/go-chi/chi/v5 v5.4.0
 	github.com/golang-jwt/jwt/v5 v5.3.1

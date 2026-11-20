@@ -1,0 +1,227 @@
+package api
+
+import (
+	"errors"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/tatitoxt/shippulse/internal/auth"
+	"github.com/tatitoxt/shippulse/internal/domain"
+	"github.com/tatitoxt/shippulse/internal/provider"
+	"github.com/tatitoxt/shippulse/internal/simruntime"
+	"github.com/tatitoxt/shippulse/internal/store"
+)
+
+// dummyHash keeps login timing similar for unknown emails.
+var dummyHash, _ = auth.HashPassword("not-a-real-password")
+
+func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	p, hash, err := s.Store.UserCredentials(r.Context(), strings.TrimSpace(body.Email))
+	if err != nil && !errors.Is(err, domain.ErrNotFound) {
+		s.internal(w, r, err)
+		return
+	}
+	if err != nil {
+		hash = dummyHash
+	}
+	if !auth.CheckPassword(hash, body.Password) || errors.Is(err, domain.ErrNotFound) {
+		writeError(w, r, http.StatusUnauthorized, "invalid_credentials", "invalid email or password")
+		return
+	}
+	token, err := s.Auth.Issue(p.UserID, p.OrganizationID, p.Email)
+	if err != nil {
+		s.internal(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"token": token, "user": p})
+}
+
+func (s *Server) me(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, principal(r))
+}
+
+func (s *Server) listServices(w http.ResponseWriter, r *http.Request) {
+	list, err := s.Store.ListServices(r.Context(), principal(r).OrganizationID)
+	if err != nil {
+		s.internal(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"services": list})
+}
+
+func (s *Server) getService(w http.ResponseWriter, r *http.Request) {
+	sv, err := s.Store.GetService(r.Context(), principal(r).OrganizationID, chi.URLParam(r, "id"))
+	if err != nil {
+		s.domainError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sv)
+}
+
+func (s *Server) listReleases(w http.ResponseWriter, r *http.Request) {
+	org := principal(r).OrganizationID
+	sv, err := s.Store.GetService(r.Context(), org, chi.URLParam(r, "id"))
+	if err != nil {
+		s.domainError(w, r, err)
+		return
+	}
+	list, err := s.Store.ListDeployments(r.Context(), org, store.ListFilter{ServiceID: sv.ID, Limit: 100})
+	if err != nil {
+		s.internal(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"service": sv, "releases": list})
+}
+
+// serviceRuntime reports what the simulated provider is actually running,
+// which can differ from the promoted version while a deployment is in flight.
+func (s *Server) serviceRuntime(w http.ResponseWriter, r *http.Request) {
+	sv, err := s.Store.GetService(r.Context(), principal(r).OrganizationID, chi.URLParam(r, "id"))
+	if err != nil {
+		s.domainError(w, r, err)
+		return
+	}
+	type envRuntime struct {
+		Environment   string             `json:"environment"`
+		StableVersion *string            `json:"stable_version"`
+		Observed      *simruntime.Status `json:"observed"`
+		ProviderError string             `json:"provider_error,omitempty"`
+	}
+	out := []envRuntime{}
+	for _, e := range sv.Environments {
+		er := envRuntime{Environment: e.EnvironmentSlug, StableVersion: e.CurrentVersion}
+		st, err := s.Runtime.Status(r.Context(), provider.Target{Service: sv.Slug, Environment: e.EnvironmentSlug})
+		switch {
+		case err == nil:
+			er.Observed = &st
+		case errors.Is(err, simruntime.ErrNoRuntime):
+		default:
+			er.ProviderError = "provider unavailable"
+		}
+		out = append(out, er)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"service_id": sv.ID, "runtimes": out})
+}
+
+func (s *Server) listDeployments(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	list, err := s.Store.ListDeployments(r.Context(), principal(r).OrganizationID,
+		store.ListFilter{ServiceID: r.URL.Query().Get("service_id"), Limit: limit})
+	if err != nil {
+		s.internal(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deployments": list})
+}
+
+func (s *Server) getDeployment(w http.ResponseWriter, r *http.Request) {
+	d, err := s.Store.GetDeployment(r.Context(), principal(r).OrganizationID, chi.URLParam(r, "id"))
+	if err != nil {
+		s.domainError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
+}
+
+func (s *Server) createDeployment(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ServiceID      string `json:"service_id"`
+		EnvironmentID  string `json:"environment_id"`
+		Version        string `json:"version"`
+		FailureProfile string `json:"failure_profile"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	key := r.Header.Get("Idempotency-Key")
+	if err := domain.ValidateIdempotencyKey(key); err != nil {
+		s.domainError(w, r, err)
+		return
+	}
+	if err := domain.ValidateVersion(body.Version); err != nil {
+		s.domainError(w, r, err)
+		return
+	}
+	profile, err := domain.ParseFailureProfile(body.FailureProfile)
+	if err != nil {
+		s.domainError(w, r, err)
+		return
+	}
+	p := principal(r)
+	d, created, err := s.Store.CreateDeployment(r.Context(), store.CreateDeploymentInput{
+		OrganizationID: p.OrganizationID, ServiceID: body.ServiceID, EnvironmentID: body.EnvironmentID,
+		Version: body.Version, FailureProfile: string(profile), IdempotencyKey: key,
+		Source: "manual", Actor: p.Email, CorrelationID: correlationID(r),
+	})
+	if err != nil {
+		s.domainError(w, r, err)
+		return
+	}
+	status := http.StatusAccepted
+	if !created {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, d)
+}
+
+func (s *Server) requestRollback(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if r.ContentLength != 0 && !decode(w, r, &body) {
+		return
+	}
+	key := r.Header.Get("Idempotency-Key")
+	if err := domain.ValidateIdempotencyKey(key); err != nil {
+		s.domainError(w, r, err)
+		return
+	}
+	reason := strings.TrimSpace(body.Reason)
+	if reason == "" {
+		reason = "manual rollback"
+	}
+	if len(reason) > 500 {
+		reason = reason[:500]
+	}
+	p := principal(r)
+	rb, created, err := s.Store.RequestRollback(r.Context(), p.OrganizationID, chi.URLParam(r, "id"), p.Email, key, reason, correlationID(r))
+	if err != nil {
+		s.domainError(w, r, err)
+		return
+	}
+	status := http.StatusAccepted
+	if !created {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, rb)
+}
+
+func (s *Server) cancelDeployment(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	d, err := s.Store.CancelDeployment(r.Context(), p.OrganizationID, chi.URLParam(r, "id"), p.Email, correlationID(r))
+	if err != nil {
+		s.domainError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
+}
+
+func (s *Server) listAudit(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	list, err := s.Store.ListAudit(r.Context(), principal(r).OrganizationID, r.URL.Query().Get("subject_id"), limit)
+	if err != nil {
+		s.internal(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"audit_events": list})
+}

@@ -122,13 +122,19 @@ func (s *Store) UserCredentials(ctx context.Context, email string) (Principal, s
 }
 
 // Membership re-reads the caller's role so revoked access takes effect immediately.
-func (s *Store) Membership(ctx context.Context, userID, orgID string) (string, error) {
-	var role string
-	err := s.Pool.QueryRow(ctx, `SELECT role FROM memberships WHERE user_id = $1 AND organization_id = $2`, userID, orgID).Scan(&role)
+// Membership re-reads the caller's current role so revocations apply immediately.
+func (s *Store) Membership(ctx context.Context, userID, orgID string) (Principal, error) {
+	p := Principal{UserID: userID, OrganizationID: orgID}
+	err := s.Pool.QueryRow(ctx, `
+		SELECT u.email, u.full_name, o.name, m.role
+		FROM memberships m
+		JOIN users u ON u.id = m.user_id
+		JOIN organizations o ON o.id = m.organization_id
+		WHERE m.user_id = $1 AND m.organization_id = $2`, userID, orgID).Scan(&p.Email, &p.FullName, &p.Organization, &p.Role)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", domain.ErrForbidden
+		return Principal{}, domain.ErrForbidden
 	}
-	return role, err
+	return p, err
 }
 
 func (s *Store) ListServices(ctx context.Context, org string) ([]Service, error) {

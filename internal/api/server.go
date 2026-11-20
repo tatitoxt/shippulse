@@ -119,7 +119,7 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			writeError(w, r, http.StatusUnauthorized, "unauthenticated", "invalid or expired token")
 			return
 		}
-		role, err := s.Store.Membership(r.Context(), claims.UserID, claims.OrgID)
+		p, err := s.Store.Membership(r.Context(), claims.UserID, claims.OrgID)
 		if errors.Is(err, domain.ErrForbidden) {
 			writeError(w, r, http.StatusUnauthorized, "unauthenticated", "membership revoked")
 			return
@@ -128,7 +128,6 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			s.internal(w, r, err)
 			return
 		}
-		p := store.Principal{UserID: claims.UserID, Email: claims.Email, OrganizationID: claims.OrgID, Role: role}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), keyPrincipal, p)))
 	})
 }

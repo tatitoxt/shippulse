@@ -95,6 +95,15 @@ func deployBody(tg testutil.Target, version string) map[string]string {
 	return map[string]string{"service_id": tg.Service, "environment_id": tg.Env, "version": version, "failure_profile": "healthy"}
 }
 
+func TestMeReturnsOrganizationAndRole(t *testing.T) {
+	base, _, _ := newServer(t)
+	c := login(t, base, "viewer@acme.example")
+	code, me := c.do("GET", "/api/v1/me", nil, nil)
+	if code != http.StatusOK || me["organization"] != "Acme Demo" || me["role"] != "VIEWER" || me["email"] != "viewer@acme.example" {
+		t.Fatalf("me: %d %v", code, me)
+	}
+}
+
 func TestLoginRejectsWrongPassword(t *testing.T) {
 	base, _, _ := newServer(t)
 	c := client{t: t, base: base}

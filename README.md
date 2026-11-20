@@ -131,7 +131,7 @@ One Go module, one binary with subcommands (`migrate`, `seed`, `api`, `worker`, 
 | Audits | `make vuln` | govulncheck and `npm audit --audit-level=high` |
 
 Measured in this repository (count them with `go test -list . ./...` and
-`go test -tags=integration -list . ./...`): 48 Go test functions — 21 unit and 27 integration —
+`go test -tags=integration -list . ./...`): 52 Go test functions — 22 unit and 30 integration —
 plus 3 Playwright E2E tests. All of them run in [GitHub Actions](.github/workflows/ci.yml) on every
 pull request and push to `main`, together with `make demo`.
 

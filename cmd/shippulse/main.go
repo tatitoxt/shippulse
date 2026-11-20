@@ -54,6 +54,9 @@ func main() {
 		err = runWorker(ctx, log)
 	case "simruntime":
 		err = serve(ctx, log, config.String("SIMRUNTIME_ADDR", ":8090"), simruntime.Handler(simruntime.New()))
+	case "probe":
+		// Container health check: exits non-zero unless the URL answers 2xx.
+		err = probe(os.Args[2:])
 	case "demo":
 		err = demo.Run(ctx, os.Stdout, demo.Config{
 			APIURL:        config.String("SHIPPULSE_API_URL", "http://localhost:8080"),
@@ -172,4 +175,20 @@ func serve(ctx context.Context, log *slog.Logger, addr string, h http.Handler) e
 		}
 		return nil
 	}
+}
+
+func probe(args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: shippulse probe <url>")
+	}
+	c := &http.Client{Timeout: 2 * time.Second}
+	resp, err := c.Get(args[0])
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("probe %s: status %d", args[0], resp.StatusCode)
+	}
+	return nil
 }

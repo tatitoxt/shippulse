@@ -1,86 +1,99 @@
-version: '3.8'
+# Local demo stack. Every credential below is a throwaway value for the
+# synthetic demo; override them via environment variables for anything else.
+x-shippulse-env: &shippulse-env
+  DATABASE_URL: postgres://shippulse:${POSTGRES_PASSWORD:-shippulse}@postgres:5432/shippulse?sslmode=disable
+  NATS_URL: nats://nats:4222
+  SIMRUNTIME_URL: http://simruntime:8090
+  JWT_SECRET: ${JWT_SECRET:-demo-only-jwt-secret-not-for-production}
+  GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-demo-only-webhook-secret}
+  DEMO_PASSWORD: ${DEMO_PASSWORD:-shippulse-demo}
 
 services:
   postgres:
-    image: postgres:16-alpine
-    container_name: shippulse-postgres
+    image: postgres:16.10-alpine
     environment:
       POSTGRES_USER: shippulse
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-shippulse}
       POSTGRES_DB: shippulse
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./infra/docker/postgres/migrations:/docker-entrypoint-initdb.d
+    ports: ["5432:5432"]
+    volumes: [postgres_data:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U shippulse -d shippulse"]
-      interval: 3s
-      timeout: 5s
-      retries: 5
-
-  redis:
-    image: redis:7-alpine
-    container_name: shippulse-redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 3s
-      timeout: 5s
-      retries: 5
+      interval: 2s
+      timeout: 3s
+      retries: 20
 
   nats:
-    image: nats:2.10-alpine
-    container_name: shippulse-nats
-    command: ["-js", "-m", "8222"]
-    ports:
-      - "4222:4222"
-      - "8222:8222"
-    volumes:
-      - nats_data:/data
+    image: nats:2.11.9-alpine
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    ports: ["4222:4222"]
+    volumes: [nats_data:/data]
     healthcheck:
-      test: ["CMD", "nc", "-z", "nats", "4222"]
-      interval: 3s
-      timeout: 5s
-      retries: 5
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8222/healthz?js-enabled-only=true"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
 
-  clickhouse:
-    image: clickhouse/clickhouse-server:24.3-alpine
-    container_name: shippulse-clickhouse
-    ports:
-      - "8123:8123"
-      - "9000:9000"
-    environment:
-      CLICKHOUSE_DB: shippulse_telemetry
-      CLICKHOUSE_USER: shippulse
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?Set CLICKHOUSE_PASSWORD}
-    volumes:
-      - clickhouse_data:/var/lib/clickhouse
-      - ./infra/docker/clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://clickhouse:8123/ping"]
-      interval: 3s
-      timeout: 5s
-      retries: 5
-
-  otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.98.0
-    container_name: shippulse-otel-collector
-    command: ["--config=/etc/otel-collector-config.yaml"]
-    volumes:
-      - ./infra/otel/otel-collector-config.yaml:/etc/otel-collector-config.yaml
-    ports:
-      - "4317:4317" # OTLP gRPC receiver
-      - "4318:4318" # OTLP HTTP receiver
-      - "8888:8888" # Metrics
+  migrate:
+    image: shippulse:local
+    build: .
+    command: ["migrate"]
+    environment: *shippulse-env
     depends_on:
-      - clickhouse
+      postgres: { condition: service_healthy }
+
+  seed:
+    image: shippulse:local
+    command: ["seed"]
+    environment: *shippulse-env
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  simruntime:
+    image: shippulse:local
+    command: ["simruntime"]
+    ports: ["8090:8090"]
+    healthcheck:
+      test: ["CMD", "/shippulse", "probe", "http://localhost:8090/healthz"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  api:
+    image: shippulse:local
+    command: ["api"]
+    environment: *shippulse-env
+    ports: ["8080:8080"]
+    healthcheck:
+      test: ["CMD", "/shippulse", "probe", "http://localhost:8080/readyz"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      seed: { condition: service_completed_successfully }
+      simruntime: { condition: service_healthy }
+
+  worker:
+    image: shippulse:local
+    command: ["worker"]
+    environment:
+      <<: *shippulse-env
+      WORKER_ID: worker-1
+    depends_on:
+      seed: { condition: service_completed_successfully }
+      nats: { condition: service_healthy }
+      simruntime: { condition: service_healthy }
+
+  web:
+    build: ./apps/web
+    environment:
+      CONTROL_PLANE_URL: http://api:8080
+    ports: ["3000:3000"]
+    depends_on:
+      api: { condition: service_healthy }
 
 volumes:
   postgres_data:
-  redis_data:
   nats_data:
-  clickhouse_data:

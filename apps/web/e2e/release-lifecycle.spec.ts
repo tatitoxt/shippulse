@@ -6,6 +6,8 @@ const run = Date.now().toString(36);
 const GOOD = `v2.0.0-${run}`;
 const BAD = `v2.1.0-${run}`;
 
+const nav = (page: Page, name: string) => page.getByRole("navigation").getByRole("link", { name, exact: true });
+
 async function login(page: Page, email: string) {
   await page.goto("/login");
   await page.getByLabel("Email").fill(email);
@@ -15,7 +17,7 @@ async function login(page: Page, email: string) {
 }
 
 async function deploy(page: Page, version: string, profile: string): Promise<string> {
-  await page.getByRole("link", { name: "Services" }).click();
+  await nav(page, "Services").click();
   await page.getByLabel("Service").selectOption({ label: "catalog-api" });
   await page.getByLabel("Environment").selectOption({ label: "staging" });
   await page.getByLabel("Version").fill(version);
@@ -56,11 +58,11 @@ test("healthy deploy is promoted; unhealthy deploy is rolled back automatically 
     await expect(audit).toContainText(action);
   }
 
-  await page.getByRole("link", { name: "Deployments", exact: true }).click();
+  await nav(page, "Deployments").click();
   await expect(page.getByTestId(`deployment-row-${BAD}`)).toContainText("failed");
   await expect(page.getByTestId(`deployment-row-${BAD}`)).toContainText(GOOD);
 
-  await page.getByRole("link", { name: "Services" }).click();
+  await nav(page, "Services").click();
   const env = page.getByTestId("env-catalog-api-staging");
   await expect(env.getByTestId("stable-version")).toHaveText(GOOD);
   await expect(env.getByTestId("observed-version")).toContainText(GOOD);
@@ -68,7 +70,7 @@ test("healthy deploy is promoted; unhealthy deploy is rolled back automatically 
 
 test("viewer can inspect but is denied deploys in the UI and by the API", async ({ page }) => {
   await login(page, "viewer@acme.example");
-  await page.getByRole("link", { name: "Services" }).click();
+  await nav(page, "Services").click();
   await expect(page.getByTestId("viewer-notice")).toBeVisible();
   await expect(page.getByRole("button", { name: "Deploy" })).toBeDisabled();
 
@@ -85,13 +87,13 @@ test("viewer can inspect but is denied deploys in the UI and by the API", async 
 
 test("another tenant cannot see Acme services or deployments", async ({ page }) => {
   await login(page, "operator@acme.example");
-  await page.getByRole("link", { name: "Deployments", exact: true }).click();
+  await nav(page, "Deployments").click();
   const acmeDeployment = await page.getByTestId("deployments-table").locator("a").first().getAttribute("href");
   expect(acmeDeployment).toMatch(/^\/deployments\//);
   await page.getByRole("button", { name: "Sign out" }).click();
 
   await login(page, "operator@globex.example");
-  await page.getByRole("link", { name: "Services" }).click();
+  await nav(page, "Services").click();
   await expect(page.getByTestId("service-invoice-worker")).toBeVisible();
   await expect(page.getByTestId("service-catalog-api")).toHaveCount(0);
   await page.goto(acmeDeployment!);

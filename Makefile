@@ -1,7 +1,7 @@
 GO ?= go
 WEB := apps/web
 COMPOSE ?= docker compose
-export TEST_DATABASE_URL ?= postgres://shippulse:shippulse@localhost:5432/shippulse_test?sslmode=disable
+export TEST_DATABASE_URL ?= postgres://shippulse:shippulse@localhost:5432/shippulse?sslmode=disable
 export TEST_NATS_URL ?= nats://localhost:4222
 
 .PHONY: build test test-integration lint vuln deps-up up down demo demo-reset web-install web-check e2e ci
@@ -14,7 +14,6 @@ test: ## Go unit tests (no external services)
 
 deps-up: ## Start only PostgreSQL and NATS (for integration tests)
 	$(COMPOSE) up -d --wait postgres nats
-	$(COMPOSE) exec -T postgres sh -c "psql -U shippulse -tc \"SELECT 1 FROM pg_database WHERE datname='shippulse_test'\" | grep -q 1 || createdb -U shippulse shippulse_test"
 
 test-integration: ## Go integration tests against real PostgreSQL and NATS
 	$(GO) test -race -count=1 -tags=integration ./...

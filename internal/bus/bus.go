@@ -27,12 +27,20 @@ const (
 var ErrRetryLater = errors.New("retry later")
 
 type Bus struct {
-	NC     *nats.Conn
-	JS     jetstream.JetStream
-	Stream jetstream.Stream
+	NC       *nats.Conn
+	JS       jetstream.JetStream
+	Stream   jetstream.Stream
+	name     string
+	prefix   string
+	consumer string
 }
 
 func Connect(ctx context.Context, url string) (*Bus, error) {
+	return ConnectNamed(ctx, url, StreamName, SubjectPrefix, ConsumerName)
+}
+
+// ConnectNamed lets tests use an isolated stream, subject prefix and consumer.
+func ConnectNamed(ctx context.Context, url, stream, prefix, consumer string) (*Bus, error) {
 	nc, err := nats.Connect(url, nats.Name("shippulse"), nats.MaxReconnects(-1))
 	if err != nil {
 		return nil, fmt.Errorf("connect nats: %w", err)
@@ -42,9 +50,9 @@ func Connect(ctx context.Context, url string) (*Bus, error) {
 		nc.Close()
 		return nil, err
 	}
-	stream, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
-		Name:       StreamName,
-		Subjects:   []string{SubjectPrefix + ">"},
+	st, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+		Name:       stream,
+		Subjects:   []string{prefix + ">"},
 		Storage:    jetstream.FileStorage,
 		Duplicates: 2 * time.Minute,
 		MaxAge:     24 * time.Hour,
@@ -53,7 +61,7 @@ func Connect(ctx context.Context, url string) (*Bus, error) {
 		nc.Close()
 		return nil, fmt.Errorf("ensure stream: %w", err)
 	}
-	return &Bus{NC: nc, JS: js, Stream: stream}, nil
+	return &Bus{NC: nc, JS: js, Stream: st, name: stream, prefix: prefix, consumer: consumer}, nil
 }
 
 func (b *Bus) Close() { b.NC.Close() }
@@ -61,7 +69,7 @@ func (b *Bus) Close() { b.NC.Close() }
 // Publish sends an outbox event using its id as Nats-Msg-Id, so a relay retry
 // after a lost ack is dropped by JetStream's duplicate window.
 func (b *Bus) Publish(ctx context.Context, ev store.OutboxEvent) error {
-	_, err := b.JS.Publish(ctx, SubjectPrefix+ev.EventType, ev.Payload, jetstream.WithMsgID(ev.ID))
+	_, err := b.JS.Publish(ctx, b.prefix+ev.EventType, ev.Payload, jetstream.WithMsgID(ev.ID))
 	return err
 }
 
@@ -70,12 +78,12 @@ type Handler func(ctx context.Context, ev domain.JobEvent) error
 
 // Consume starts a durable pull consumer and dispatches messages to h.
 func (b *Bus) Consume(ctx context.Context, log *slog.Logger, h Handler) (jetstream.ConsumeContext, error) {
-	cons, err := b.JS.CreateOrUpdateConsumer(ctx, StreamName, jetstream.ConsumerConfig{
-		Durable:       ConsumerName,
+	cons, err := b.JS.CreateOrUpdateConsumer(ctx, b.name, jetstream.ConsumerConfig{
+		Durable:       b.consumer,
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		AckWait:       2 * time.Minute,
 		MaxDeliver:    100,
-		FilterSubject: SubjectPrefix + ">",
+		FilterSubject: b.prefix + ">",
 	})
 	if err != nil {
 		return nil, fmt.Errorf("ensure consumer: %w", err)

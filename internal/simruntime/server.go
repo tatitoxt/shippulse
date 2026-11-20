@@ -11,13 +11,13 @@ import (
 // Handler exposes the runtime over HTTP so the worker talks to it like a real
 // provider API:
 //
-//	PUT  /v1/runtimes/{service}/{env}         {"version": "...", "profile": "..."}
-//	GET  /v1/runtimes/{service}/{env}
-//	GET  /v1/runtimes/{service}/{env}/health
+//	PUT  /v1/runtimes/{tenant}/{service}/{env}         {"version": "...", "profile": "..."}
+//	GET  /v1/runtimes/{tenant}/{service}/{env}
+//	GET  /v1/runtimes/{tenant}/{service}/{env}/health
 func Handler(rt *Runtime) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
-	mux.HandleFunc("PUT /v1/runtimes/{service}/{env}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("PUT /v1/runtimes/{tenant}/{service}/{env}", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Version string `json:"version"`
 			Profile string `json:"profile"`
@@ -31,24 +31,24 @@ func Handler(rt *Runtime) http.Handler {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid version or profile"})
 			return
 		}
-		changed, err := rt.Apply(r.PathValue("service"), r.PathValue("env"), body.Version, profile)
+		changed, err := rt.Apply(r.PathValue("tenant"), r.PathValue("service"), r.PathValue("env"), body.Version, profile)
 		if errors.Is(err, ErrUnavailable) {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
 			return
 		}
-		st, _ := rt.Status(r.PathValue("service"), r.PathValue("env"))
+		st, _ := rt.Status(r.PathValue("tenant"), r.PathValue("service"), r.PathValue("env"))
 		writeJSON(w, http.StatusOK, map[string]any{"changed": changed, "status": st})
 	})
-	mux.HandleFunc("GET /v1/runtimes/{service}/{env}", func(w http.ResponseWriter, r *http.Request) {
-		st, err := rt.Status(r.PathValue("service"), r.PathValue("env"))
+	mux.HandleFunc("GET /v1/runtimes/{tenant}/{service}/{env}", func(w http.ResponseWriter, r *http.Request) {
+		st, err := rt.Status(r.PathValue("tenant"), r.PathValue("service"), r.PathValue("env"))
 		if err != nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 			return
 		}
 		writeJSON(w, http.StatusOK, st)
 	})
-	mux.HandleFunc("GET /v1/runtimes/{service}/{env}/health", func(w http.ResponseWriter, r *http.Request) {
-		err := rt.Health(r.Context(), r.PathValue("service"), r.PathValue("env"))
+	mux.HandleFunc("GET /v1/runtimes/{tenant}/{service}/{env}/health", func(w http.ResponseWriter, r *http.Request) {
+		err := rt.Health(r.Context(), r.PathValue("tenant"), r.PathValue("service"), r.PathValue("env"))
 		switch {
 		case err == nil:
 			writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

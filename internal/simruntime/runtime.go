@@ -25,6 +25,7 @@ type Event struct {
 }
 
 type Status struct {
+	Tenant      string    `json:"tenant"`
 	Service     string    `json:"service"`
 	Environment string    `json:"environment"`
 	Version     string    `json:"version"`
@@ -46,20 +47,22 @@ func New() *Runtime {
 	return &Runtime{state: map[string]*Status{}, now: func() time.Time { return time.Now().UTC() }, HangLimit: 30 * time.Second}
 }
 
-func key(service, env string) string { return service + "/" + env }
+// Runtimes are keyed by tenant as well, so two organizations that use the same
+// service and environment slugs never share a runtime.
+func key(tenant, service, env string) string { return tenant + "/" + service + "/" + env }
 
 // Apply sets the running version. Re-applying the same version and profile is
 // a no-op, which makes retries and duplicate jobs safe.
-func (r *Runtime) Apply(service, env, version string, profile domain.FailureProfile) (changed bool, err error) {
+func (r *Runtime) Apply(tenant, service, env, version string, profile domain.FailureProfile) (changed bool, err error) {
 	if profile == domain.ProfileProviderUnavailable {
 		return false, ErrUnavailable
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	st, ok := r.state[key(service, env)]
+	st, ok := r.state[key(tenant, service, env)]
 	if !ok {
-		st = &Status{Service: service, Environment: env}
-		r.state[key(service, env)] = st
+		st = &Status{Tenant: tenant, Service: service, Environment: env}
+		r.state[key(tenant, service, env)] = st
 	}
 	if st.Version == version && st.Profile == string(profile) {
 		return false, nil
@@ -71,10 +74,10 @@ func (r *Runtime) Apply(service, env, version string, profile domain.FailureProf
 	return true, nil
 }
 
-func (r *Runtime) Status(service, env string) (Status, error) {
+func (r *Runtime) Status(tenant, service, env string) (Status, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	st, ok := r.state[key(service, env)]
+	st, ok := r.state[key(tenant, service, env)]
 	if !ok {
 		return Status{}, ErrNoRuntime
 	}
@@ -84,8 +87,8 @@ func (r *Runtime) Status(service, env string) (Status, error) {
 }
 
 // Health answers a probe for the running version.
-func (r *Runtime) Health(ctx context.Context, service, env string) error {
-	st, err := r.Status(service, env)
+func (r *Runtime) Health(ctx context.Context, tenant, service, env string) error {
+	st, err := r.Status(tenant, service, env)
 	if err != nil {
 		return err
 	}

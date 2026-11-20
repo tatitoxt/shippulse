@@ -100,7 +100,7 @@ func (s *Server) serviceRuntime(w http.ResponseWriter, r *http.Request) {
 	out := []envRuntime{}
 	for _, e := range sv.Environments {
 		er := envRuntime{Environment: e.EnvironmentSlug, StableVersion: e.CurrentVersion}
-		st, err := s.Runtime.Status(r.Context(), provider.Target{Service: sv.Slug, Environment: e.EnvironmentSlug})
+		st, err := s.Runtime.Status(r.Context(), provider.Target{Tenant: sv.OrganizationID, Service: sv.Slug, Environment: e.EnvironmentSlug})
 		switch {
 		case err == nil:
 			er.Observed = &st

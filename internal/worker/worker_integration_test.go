@@ -114,7 +114,7 @@ func (h *harness) stable(t *testing.T) string {
 }
 
 func (h *harness) running(t *testing.T) string {
-	st, err := h.prov.RT.Status("checkout-api", "staging")
+	st, err := h.prov.RT.Status(h.tg.Org, "checkout-api", "staging")
 	if err != nil {
 		return ""
 	}
@@ -235,7 +235,7 @@ func TestDuplicateDeliveryDoesNotReapply(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(300 * time.Millisecond)
-	st, _ := h.prov.RT.Status("checkout-api", "staging")
+	st, _ := h.prov.RT.Status(h.tg.Org, "checkout-api", "staging")
 	if st.Applies != 1 {
 		t.Fatalf("version applied %d times", st.Applies)
 	}
@@ -256,7 +256,7 @@ func TestWorkerResumesAfterCrashWithoutRepeatingCompletedSteps(t *testing.T) {
 		t.Fatalf("claim: %v %v", res, err)
 	}
 	claimed, _ = h.s.ValidateTarget(ctx, claimed, "crashed")
-	_ = h.prov.Apply(ctx, provider.Target{Service: "checkout-api", Environment: "staging"}, "v2.0.0", domain.ProfileHealthy)
+	_ = h.prov.Apply(ctx, provider.Target{Tenant: h.tg.Org, Service: "checkout-api", Environment: "staging"}, "v2.0.0", domain.ProfileHealthy)
 	if err := h.s.CompleteStep(ctx, claimed, "crashed", domain.StepApplyVersion, "applied"); err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +272,7 @@ func TestWorkerResumesAfterCrashWithoutRepeatingCompletedSteps(t *testing.T) {
 	if final.Steps[1].Attempts != 0 {
 		t.Fatalf("apply_version re-ran after resume (attempts %d)", final.Steps[1].Attempts)
 	}
-	st, _ := h.prov.RT.Status("checkout-api", "staging")
+	st, _ := h.prov.RT.Status(h.tg.Org, "checkout-api", "staging")
 	if st.Applies != 2 { // v1.0.0 and v2.0.0, once each
 		t.Fatalf("applies: %d", st.Applies)
 	}

@@ -54,7 +54,7 @@ func (e *Executor) Handle(ctx context.Context, ev domain.JobEvent) error {
 }
 
 func target(d store.Deployment) provider.Target {
-	return provider.Target{Service: d.ServiceSlug, Environment: d.EnvironmentSlug}
+	return provider.Target{Tenant: d.OrganizationID, Service: d.ServiceSlug, Environment: d.EnvironmentSlug}
 }
 
 // RunDeployment executes validate -> apply_version -> health_probe -> promote,

@@ -17,7 +17,9 @@ var (
 	ErrUnhealthy   = errors.New("health check failed")
 )
 
+// Target identifies one runtime. Tenant is the organization id.
 type Target struct {
+	Tenant      string
 	Service     string
 	Environment string
 }
@@ -45,7 +47,7 @@ func (m *Memory) Apply(_ context.Context, t Target, version string, profile doma
 			return err
 		}
 	}
-	_, err := m.RT.Apply(t.Service, t.Environment, version, profile)
+	_, err := m.RT.Apply(t.Tenant, t.Service, t.Environment, version, profile)
 	if errors.Is(err, simruntime.ErrUnavailable) {
 		return ErrUnavailable
 	}
@@ -53,7 +55,7 @@ func (m *Memory) Apply(_ context.Context, t Target, version string, profile doma
 }
 
 func (m *Memory) Probe(ctx context.Context, t Target) error {
-	err := m.RT.Health(ctx, t.Service, t.Environment)
+	err := m.RT.Health(ctx, t.Tenant, t.Service, t.Environment)
 	switch {
 	case err == nil:
 		return nil
@@ -65,7 +67,7 @@ func (m *Memory) Probe(ctx context.Context, t Target) error {
 }
 
 func (m *Memory) Status(_ context.Context, t Target) (simruntime.Status, error) {
-	return m.RT.Status(t.Service, t.Environment)
+	return m.RT.Status(t.Tenant, t.Service, t.Environment)
 }
 
 // ProbeConfig controls the health probe loop.

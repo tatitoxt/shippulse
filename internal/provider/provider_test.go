@@ -23,7 +23,7 @@ func TestProbeProfiles(t *testing.T) {
 	for name, p := range providers(t) {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
-			tg := Target{Service: "checkout", Environment: "staging"}
+			tg := Target{Tenant: "org-1", Service: "checkout", Environment: "staging"}
 			cases := []struct {
 				version string
 				profile domain.FailureProfile
@@ -56,7 +56,7 @@ func TestProbeProfiles(t *testing.T) {
 
 func TestHTTPProviderUnreachable(t *testing.T) {
 	p := NewHTTP("http://127.0.0.1:1")
-	if err := p.Apply(context.Background(), Target{"a", "b"}, "v1", domain.ProfileHealthy); !errors.Is(err, ErrUnavailable) {
+	if err := p.Apply(context.Background(), Target{"t", "a", "b"}, "v1", domain.ProfileHealthy); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("want ErrUnavailable, got %v", err)
 	}
 }

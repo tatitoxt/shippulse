@@ -24,7 +24,7 @@ func NewHTTP(baseURL string) *HTTP {
 }
 
 func (h *HTTP) url(t Target, suffix string) string {
-	return fmt.Sprintf("%s/v1/runtimes/%s/%s%s", h.BaseURL, url.PathEscape(t.Service), url.PathEscape(t.Environment), suffix)
+	return fmt.Sprintf("%s/v1/runtimes/%s/%s/%s%s", h.BaseURL, url.PathEscape(t.Tenant), url.PathEscape(t.Service), url.PathEscape(t.Environment), suffix)
 }
 
 func (h *HTTP) Apply(ctx context.Context, t Target, version string, profile domain.FailureProfile) error {

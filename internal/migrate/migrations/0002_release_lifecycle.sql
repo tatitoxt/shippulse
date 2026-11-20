@@ -118,7 +118,7 @@ CREATE TABLE audit_events (
     subject_id         UUID NOT NULL,
     correlation_id     TEXT NOT NULL,
     metadata_redacted  JSONB NOT NULL DEFAULT '{}'::jsonb,
-    occurred_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+    occurred_at        TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 
 CREATE INDEX audit_org_occurred ON audit_events (organization_id, occurred_at DESC);

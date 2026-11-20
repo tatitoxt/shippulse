@@ -79,10 +79,12 @@ type Handler func(ctx context.Context, ev domain.JobEvent) error
 // Consume starts a durable pull consumer and dispatches messages to h.
 func (b *Bus) Consume(ctx context.Context, log *slog.Logger, h Handler) (jetstream.ConsumeContext, error) {
 	cons, err := b.JS.CreateOrUpdateConsumer(ctx, b.name, jetstream.ConsumerConfig{
-		Durable:       b.consumer,
-		AckPolicy:     jetstream.AckExplicitPolicy,
-		AckWait:       2 * time.Minute,
-		MaxDeliver:    100,
+		Durable:   b.consumer,
+		AckPolicy: jetstream.AckExplicitPolicy,
+		AckWait:   2 * time.Minute,
+		// Unlimited: a job is only removed by Ack (done) or Term (malformed), so
+		// an accepted deployment is never dropped during a long outage.
+		MaxDeliver:    -1,
 		FilterSubject: b.prefix + ">",
 	})
 	if err != nil {
@@ -104,7 +106,11 @@ func (b *Bus) Consume(ctx context.Context, log *slog.Logger, h Handler) (jetstre
 		default:
 			log.Error("job failed; will be redelivered", "type", ev.Type, "aggregate_id", ev.AggregateID,
 				"correlation_id", ev.CorrelationID, "err", err)
-			_ = msg.NakWithDelay(3 * time.Second)
+			attempt := 1
+			if md, err := msg.Metadata(); err == nil {
+				attempt = int(md.NumDelivered)
+			}
+			_ = msg.NakWithDelay(domain.Backoff(attempt, time.Second, time.Minute))
 		}
 	})
 }

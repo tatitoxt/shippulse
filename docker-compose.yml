@@ -15,7 +15,7 @@ services:
       POSTGRES_USER: shippulse
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-shippulse}
       POSTGRES_DB: shippulse
-    ports: ["5432:5432"]
+    ports: ["127.0.0.1:5432:5432"]
     volumes: [postgres_data:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U shippulse -d shippulse"]
@@ -26,7 +26,7 @@ services:
   nats:
     image: nats:2.11.9-alpine
     command: ["-js", "-sd", "/data", "-m", "8222"]
-    ports: ["4222:4222"]
+    ports: ["127.0.0.1:4222:4222"]
     volumes: [nats_data:/data]
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8222/healthz?js-enabled-only=true"]
@@ -52,7 +52,7 @@ services:
   simruntime:
     image: shippulse:local
     command: ["simruntime"]
-    ports: ["8090:8090"]
+    ports: ["127.0.0.1:8090:8090"]
     healthcheck:
       test: ["CMD", "/shippulse", "probe", "http://localhost:8090/healthz"]
       interval: 2s
@@ -65,7 +65,7 @@ services:
     image: shippulse:local
     command: ["api"]
     environment: *shippulse-env
-    ports: ["8080:8080"]
+    ports: ["127.0.0.1:8080:8080"]
     healthcheck:
       test: ["CMD", "/shippulse", "probe", "http://localhost:8080/readyz"]
       interval: 2s
@@ -90,7 +90,7 @@ services:
     build: ./apps/web
     environment:
       CONTROL_PLANE_URL: http://api:8080
-    ports: ["3000:3000"]
+    ports: ["127.0.0.1:3000:3000"]
     depends_on:
       api: { condition: service_healthy }
 

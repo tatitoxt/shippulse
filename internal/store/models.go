@@ -79,6 +79,7 @@ type Deployment struct {
 	GitSHA               *string    `json:"git_sha"`
 	Repository           *string    `json:"repository"`
 	Status               string     `json:"status"`
+	CanaryWeights        []int      `json:"canary_weights,omitempty"`
 	PreviousVersion      *string    `json:"previous_version"`
 	PreviousDeploymentID *string    `json:"previous_deployment_id"`
 	ErrorCode            *string    `json:"error_code"`
@@ -124,5 +125,6 @@ type CreateDeploymentInput struct {
 	Source         string
 	Actor          string
 	GitSHA         string
+	Canary         []int
 	CorrelationID  string
 }

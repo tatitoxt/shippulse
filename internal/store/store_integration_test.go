@@ -34,10 +34,10 @@ func setup(t *testing.T) (*store.Store, testutil.Target) {
 func TestMigrationsAreIdempotent(t *testing.T) {
 	s, _ := setup(t)
 	v, err := migrate.Up(context.Background(), s.Pool)
-	if err != nil || v != 3 {
+	if err != nil || v != 4 {
 		t.Fatalf("re-running migrations: version=%d err=%v", v, err)
 	}
-	if n := testutil.Count(t, s, `SELECT count(*) FROM schema_migrations`); n != 3 {
+	if n := testutil.Count(t, s, `SELECT count(*) FROM schema_migrations`); n != 4 {
 		t.Fatalf("schema_migrations rows: %d", n)
 	}
 }

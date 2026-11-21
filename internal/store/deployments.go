@@ -13,7 +13,8 @@ import (
 const deploymentColumns = `d.id, d.organization_id, d.service_id, s.slug, d.environment_id, e.slug, d.version,
 	d.failure_profile, d.source, d.actor, d.git_sha, s.repository_full_name, d.status,
 	d.previous_version, d.previous_deployment_id,
-	d.error_code, d.error_message, d.correlation_id, d.attempts, d.created_at, d.started_at, d.finished_at`
+	d.error_code, d.error_message, d.correlation_id, d.attempts, d.created_at, d.started_at, d.finished_at,
+	d.canary_weights`
 
 const deploymentFrom = ` FROM deployments d
 	JOIN services s ON s.id = d.service_id
@@ -24,7 +25,7 @@ func scanDeployment(r pgx.Row) (Deployment, error) {
 	err := r.Scan(&d.ID, &d.OrganizationID, &d.ServiceID, &d.ServiceSlug, &d.EnvironmentID, &d.EnvironmentSlug,
 		&d.Version, &d.FailureProfile, &d.Source, &d.Actor, &d.GitSHA, &d.Repository, &d.Status, &d.PreviousVersion,
 		&d.PreviousDeploymentID, &d.ErrorCode, &d.ErrorMessage, &d.CorrelationID, &d.Attempts,
-		&d.CreatedAt, &d.StartedAt, &d.FinishedAt)
+		&d.CreatedAt, &d.StartedAt, &d.FinishedAt, &d.CanaryWeights)
 	return d, err
 }
 
@@ -74,15 +75,18 @@ func (s *Store) CreateDeployment(ctx context.Context, in CreateDeploymentInput) 
 	if in.GitSHA != "" {
 		gitSHA = &in.GitSHA
 	}
+	if in.Canary == nil {
+		in.Canary = []int{}
+	}
 	var id string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO deployments (organization_id, service_id, environment_id, version, failure_profile,
-			idempotency_key, source, actor, git_sha, correlation_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			idempotency_key, source, actor, git_sha, correlation_id, canary_weights)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (organization_id, idempotency_key) DO NOTHING
 		RETURNING id`,
 		in.OrganizationID, in.ServiceID, in.EnvironmentID, in.Version, in.FailureProfile,
-		in.IdempotencyKey, in.Source, in.Actor, gitSHA, in.CorrelationID).Scan(&id)
+		in.IdempotencyKey, in.Source, in.Actor, gitSHA, in.CorrelationID, in.Canary).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// A concurrent request with the same key won the race.
 		_ = tx.Rollback(ctx)
@@ -95,7 +99,7 @@ func (s *Store) CreateDeployment(ctx context.Context, in CreateDeploymentInput) 
 	if err != nil {
 		return Deployment{}, false, fmt.Errorf("insert deployment: %w", err)
 	}
-	for i, name := range domain.Steps {
+	for i, name := range domain.DeploymentSteps(in.Canary) {
 		if _, err := tx.Exec(ctx, `INSERT INTO deployment_steps (deployment_id, ordinal, name) VALUES ($1, $2, $3)`,
 			id, i+1, name); err != nil {
 			return Deployment{}, false, fmt.Errorf("insert step %s: %w", name, err)
@@ -106,7 +110,7 @@ func (s *Store) CreateDeployment(ctx context.Context, in CreateDeploymentInput) 
 	}
 	if err := insertAudit(ctx, tx, in.OrganizationID, in.Actor, "deployment.requested", "deployment", id, in.CorrelationID,
 		map[string]any{"version": in.Version, "source": in.Source, "failure_profile": in.FailureProfile,
-			"service_id": in.ServiceID, "environment_id": in.EnvironmentID}); err != nil {
+			"service_id": in.ServiceID, "environment_id": in.EnvironmentID, "canary": in.Canary}); err != nil {
 		return Deployment{}, false, err
 	}
 	if err := tx.Commit(ctx); err != nil {

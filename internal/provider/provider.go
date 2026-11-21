@@ -29,6 +29,8 @@ type Provider interface {
 	Apply(ctx context.Context, t Target, version string, profile domain.FailureProfile) error
 	// Probe performs one health check against the running version.
 	Probe(ctx context.Context, t Target) error
+	// SetTraffic routes percent of traffic to the running version (canary).
+	SetTraffic(ctx context.Context, t Target, percent int) error
 	Status(ctx context.Context, t Target) (simruntime.Status, error)
 }
 
@@ -52,6 +54,10 @@ func (m *Memory) Apply(_ context.Context, t Target, version string, profile doma
 		return ErrUnavailable
 	}
 	return err
+}
+
+func (m *Memory) SetTraffic(_ context.Context, t Target, percent int) error {
+	return m.RT.SetTraffic(t.Tenant, t.Service, t.Environment, percent)
 }
 
 func (m *Memory) Probe(ctx context.Context, t Target) error {

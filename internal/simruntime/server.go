@@ -47,6 +47,24 @@ func Handler(rt *Runtime) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, st)
 	})
+	mux.HandleFunc("PUT /v1/runtimes/{tenant}/{service}/{env}/traffic", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Percent int `json:"percent"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+			return
+		}
+		if err := rt.SetTraffic(r.PathValue("tenant"), r.PathValue("service"), r.PathValue("env"), body.Percent); err != nil {
+			status := http.StatusBadRequest
+			if errors.Is(err, ErrNoRuntime) {
+				status = http.StatusNotFound
+			}
+			writeJSON(w, status, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusNoContent, nil)
+	})
 	mux.HandleFunc("GET /v1/runtimes/{tenant}/{service}/{env}/health", func(w http.ResponseWriter, r *http.Request) {
 		err := rt.Health(r.Context(), r.PathValue("tenant"), r.PathValue("service"), r.PathValue("env"))
 		switch {

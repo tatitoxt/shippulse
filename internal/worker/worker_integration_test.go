@@ -328,3 +328,55 @@ func TestManualRollbackOfCurrentRelease(t *testing.T) {
 		t.Fatalf("stable=%s running=%s", h.stable(t), h.running(t))
 	}
 }
+
+func TestCanaryDeploymentShiftsTrafficBeforePromoting(t *testing.T) {
+	h := start(t)
+	h.wait(t, h.deploy(t, "v1.0.0", domain.ProfileHealthy).ID)
+
+	d, _, err := h.s.CreateDeployment(context.Background(), store.CreateDeploymentInput{
+		OrganizationID: h.tg.Org, ServiceID: h.tg.Service, EnvironmentID: h.tg.Env, Version: "v2.0.0",
+		FailureProfile: string(domain.ProfileHealthy), IdempotencyKey: uuid.NewString(), Source: "manual",
+		Actor: "operator@acme.example", Canary: []int{10, 50}, CorrelationID: uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d = h.wait(t, d.ID)
+	if d.Status != "succeeded" {
+		t.Fatalf("status=%s err=%v", d.Status, d.ErrorMessage)
+	}
+	steps := stepStatus(d)
+	for _, name := range []string{"canary_10", "canary_50", "promote"} {
+		if steps[name] != "succeeded" {
+			t.Fatalf("step %s = %s (all: %v)", name, steps[name], steps)
+		}
+	}
+	st, err := h.prov.RT.Status(h.tg.Org, "checkout-api", "staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.TrafficPercent != 50 {
+		t.Fatalf("traffic = %d%%, want 50 (last canary weight)", st.TrafficPercent)
+	}
+}
+
+func TestCanaryDeploymentRollsBackOnUnhealthyWeight(t *testing.T) {
+	h := start(t)
+	h.wait(t, h.deploy(t, "v1.0.0", domain.ProfileHealthy).ID)
+
+	d, _, err := h.s.CreateDeployment(context.Background(), store.CreateDeploymentInput{
+		OrganizationID: h.tg.Org, ServiceID: h.tg.Service, EnvironmentID: h.tg.Env, Version: "v2.0.0",
+		FailureProfile: string(domain.ProfileUnhealthy), IdempotencyKey: uuid.NewString(), Source: "manual",
+		Actor: "operator@acme.example", Canary: []int{10}, CorrelationID: uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d = h.wait(t, d.ID)
+	if d.Status != "failed" {
+		t.Fatalf("status=%s", d.Status)
+	}
+	if got := stepStatus(d)["canary_10"]; got != "" && got != "skipped" && got != "failed" {
+		t.Fatalf("canary_10 = %s", got)
+	}
+}

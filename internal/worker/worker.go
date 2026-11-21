@@ -159,6 +159,34 @@ func (e *Executor) runSteps(ctx context.Context, d store.Deployment, done map[st
 		}
 	}
 
+	// Progressive rollout: each canary_<pct> step shifts traffic then
+	// re-probes before the next weight; failure rolls back like any step.
+	for _, st := range d.Steps {
+		w, ok := domain.ParseCanaryWeight(st.Name)
+		if !ok || done[st.Name] {
+			continue
+		}
+		if err := e.Store.StartStep(ctx, d, owner, st.Name); err != nil {
+			return err
+		}
+		if err := e.Provider.SetTraffic(ctx, target(d), w); err != nil {
+			return fail(store.Failure{Step: st.Name, Code: domain.CodeProviderUnavailable,
+				Message: fmt.Sprintf("traffic shift to %d%% rejected: %v", w, err)})
+		}
+		tries, code, _ := provider.ProbeUntilHealthy(ctx, e.Provider, target(d), e.Cfg.Probe)
+		if code != "" {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fail(store.Failure{Step: st.Name, Code: code, Rollback: true,
+				Message: fmt.Sprintf("%s at %d%% traffic after %d probe(s)", code, w, tries)})
+		}
+		if err := e.Store.CompleteStep(ctx, d, owner, st.Name,
+			fmt.Sprintf("%d%% traffic healthy after %d probe(s)", w, tries)); err != nil {
+			return err
+		}
+	}
+
 	if err := e.Store.StartStep(ctx, d, owner, domain.StepPromote); err != nil {
 		return err
 	}

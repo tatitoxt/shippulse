@@ -4,6 +4,7 @@
 package simruntime
 
 import (
+	"fmt"
 	"context"
 	"errors"
 	"sync"
@@ -33,6 +34,9 @@ type Status struct {
 	AppliedAt   time.Time `json:"applied_at"`
 	Applies     int       `json:"applies"`
 	History     []Event   `json:"history"`
+	// TrafficPercent is the share of traffic routed to Version during a
+	// canary rollout; 0 or 100 means fully routed.
+	TrafficPercent int `json:"traffic_percent"`
 }
 
 type Runtime struct {
@@ -72,6 +76,22 @@ func (r *Runtime) Apply(tenant, service, env, version string, profile domain.Fai
 	st.Applies++
 	st.History = append(st.History, Event{Version: version, Profile: string(profile), AppliedAt: now})
 	return true, nil
+}
+
+// SetTraffic shifts the share of traffic routed to the running version.
+// Idempotent and safe to retry; percent must be 0-100.
+func (r *Runtime) SetTraffic(tenant, service, env string, percent int) error {
+	if percent < 0 || percent > 100 {
+		return fmt.Errorf("traffic percent %d out of range", percent)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	st, ok := r.state[key(tenant, service, env)]
+	if !ok {
+		return ErrNoRuntime
+	}
+	st.TrafficPercent = percent
+	return nil
 }
 
 func (r *Runtime) Status(tenant, service, env string) (Status, error) {

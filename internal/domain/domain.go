@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -82,6 +83,55 @@ const (
 )
 
 var Steps = []string{StepValidate, StepApplyVersion, StepHealthProbe, StepPromote}
+
+// CanaryStepPrefix marks a progressive-traffic step; its suffix is the percent.
+const CanaryStepPrefix = "canary_"
+
+// DeploymentSteps returns the ordered step names for a deployment: the fixed
+// pipeline plus one canary_<pct> step per weight, inserted before promote.
+func DeploymentSteps(canary []int) []string {
+	out := make([]string, 0, len(Steps)+len(canary))
+	for _, s := range Steps {
+		if s == StepPromote {
+			for _, w := range canary {
+				out = append(out, fmt.Sprintf("%s%d", CanaryStepPrefix, w))
+			}
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// ParseCanaryWeight decodes a canary_<pct> step name; ok=false for other names.
+func ParseCanaryWeight(name string) (int, bool) {
+	if !strings.HasPrefix(name, CanaryStepPrefix) {
+		return 0, false
+	}
+	w, err := strconv.Atoi(strings.TrimPrefix(name, CanaryStepPrefix))
+	if err != nil || w < 1 || w > 99 {
+		return 0, false
+	}
+	return w, true
+}
+
+// ValidateCanaryWeights rejects out-of-range, unsorted or duplicated weights
+// and caps the number of steps.
+func ValidateCanaryWeights(ws []int) error {
+	if len(ws) == 0 || len(ws) > 6 {
+		return errors.New("canary requires 1-6 weights")
+	}
+	prev := 0
+	for _, w := range ws {
+		if w < 1 || w > 99 {
+			return fmt.Errorf("canary weight %d out of range (1-99)", w)
+		}
+		if w <= prev {
+			return errors.New("canary weights must be strictly increasing")
+		}
+		prev = w
+	}
+	return nil
+}
 
 // FailureProfile selects how the simulated runtime behaves for a version.
 type FailureProfile string

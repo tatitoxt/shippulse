@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -232,5 +233,41 @@ func TestErrorsCarryCorrelationID(t *testing.T) {
 	code, out := c.do("GET", "/api/v1/deployments/"+uuid.NewString(), nil, map[string]string{"X-Correlation-ID": corr})
 	if code != http.StatusNotFound || out["error"].(map[string]any)["correlation_id"] != corr {
 		t.Fatalf("got %d %v", code, out)
+	}
+}
+
+func TestCanaryWeightsAreValidatedAndStored(t *testing.T) {
+	base, acme, _ := newServer(t)
+	c := login(t, base, "operator@acme.example")
+
+	canaryBody := func(version string, w []int) map[string]any {
+		b := map[string]any{"service_id": acme.Service, "environment_id": acme.Env,
+			"version": version, "failure_profile": "healthy", "canary": w}
+		return b
+	}
+	for _, w := range [][]int{{0}, {100}, {50, 50}, {90, 10}} {
+		code, _ := c.do("POST", "/api/v1/deployments", canaryBody("v9.9.9", w),
+			map[string]string{"Idempotency-Key": uuid.NewString()})
+		if code != http.StatusUnprocessableEntity {
+			t.Fatalf("canary %v: got %d, want 422", w, code)
+		}
+	}
+
+	body := canaryBody("v1.2.3", []int{10, 50})
+	code, d := c.do("POST", "/api/v1/deployments", body, map[string]string{"Idempotency-Key": uuid.NewString()})
+	if code != http.StatusAccepted {
+		t.Fatalf("create: %d %v", code, d)
+	}
+	code, got := c.do("GET", "/api/v1/deployments/"+d["id"].(string), nil, nil)
+	if code != http.StatusOK {
+		t.Fatalf("get: %d", code)
+	}
+	var names []string
+	for _, st := range got["steps"].([]any) {
+		names = append(names, st.(map[string]any)["name"].(string))
+	}
+	want := "validate,apply_version,health_probe,canary_10,canary_50,promote"
+	if strings.Join(names, ",") != want {
+		t.Fatalf("steps = %v, want %v", names, want)
 	}
 }

@@ -33,7 +33,11 @@ that an operator can see the evidence afterwards.
   skips completed steps when resuming after a crash, fences off workers that lost their lease,
   and ignores duplicate deliveries. A partial unique index allows only one running deployment
   per service/environment.
-- **Lifecycle**: `validate → apply_version → health_probe → promote`. The simulated runtime
+- **Lifecycle**: `validate → apply_version → health_probe → [canary_<pct>…] → promote`.
+  A request may carry `"canary": [10, 50]` — strictly increasing weights, 1-99 — and the
+  worker inserts one `canary_<pct>` step per weight before `promote`, calling the provider's
+  `SetTraffic` and re-probing health between shifts; a failed canary step rolls back like
+  any other. The simulated runtime
   supports the failure profiles `healthy`, `unhealthy`, `timeout` and `provider_unavailable`.
 - **Automatic rollback**: a failed health probe marks the deployment `failed` and queues a
   separate rollback operation that re-applies and re-probes the previous stable version.
@@ -163,7 +167,7 @@ pull request and push to `main`, together with `make demo`.
 
 ## Roadmap
 
-- Canary/progressive steps with real metrics as rollback signals.
+- Real metrics providers (error rate, latency) as canary rollback signals instead of health probes alone.
 - A real provider (for example a Kubernetes Deployment) behind the existing `Provider` interface, opt-in via configuration.
 - OpenTelemetry traces across API → outbox → worker using the existing correlation id.
 

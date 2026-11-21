@@ -140,6 +140,7 @@ func (s *Server) createDeployment(w http.ResponseWriter, r *http.Request) {
 		EnvironmentID  string `json:"environment_id"`
 		Version        string `json:"version"`
 		FailureProfile string `json:"failure_profile"`
+		Canary         []int  `json:"canary"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -158,11 +159,17 @@ func (s *Server) createDeployment(w http.ResponseWriter, r *http.Request) {
 		s.domainError(w, r, err)
 		return
 	}
+	if len(body.Canary) > 0 {
+		if err := domain.ValidateCanaryWeights(body.Canary); err != nil {
+			s.domainError(w, r, fmt.Errorf("%w: %s", domain.ErrValidation, err.Error()))
+			return
+		}
+	}
 	p := principal(r)
 	d, created, err := s.Store.CreateDeployment(r.Context(), store.CreateDeploymentInput{
 		OrganizationID: p.OrganizationID, ServiceID: body.ServiceID, EnvironmentID: body.EnvironmentID,
 		Version: body.Version, FailureProfile: string(profile), IdempotencyKey: key,
-		Source: "manual", Actor: p.Email, CorrelationID: correlationID(r),
+		Source: "manual", Actor: p.Email, Canary: body.Canary, CorrelationID: correlationID(r),
 	})
 	if err != nil {
 		s.domainError(w, r, err)

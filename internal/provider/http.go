@@ -49,6 +49,28 @@ func (h *HTTP) Apply(ctx context.Context, t Target, version string, profile doma
 	}
 }
 
+func (h *HTTP) SetTraffic(ctx context.Context, t Target, percent int) error {
+	body, _ := json.Marshal(map[string]int{"percent": percent})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, h.url(t, "/traffic"), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := h.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	defer resp.Body.Close()
+	switch {
+	case resp.StatusCode == http.StatusNoContent:
+		return nil
+	case resp.StatusCode >= 500:
+		return fmt.Errorf("%w: status %d", ErrUnavailable, resp.StatusCode)
+	default:
+		return fmt.Errorf("provider rejected traffic shift: status %d", resp.StatusCode)
+	}
+}
+
 func (h *HTTP) Probe(ctx context.Context, t Target) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.url(t, "/health"), nil)
 	if err != nil {

@@ -15,6 +15,10 @@ import (
 	"github.com/tatitoxt/shippulse/internal/ghstatus"
 	"github.com/tatitoxt/shippulse/internal/provider"
 	"github.com/tatitoxt/shippulse/internal/store"
+	"github.com/tatitoxt/shippulse/internal/telemetry"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Config struct {
@@ -53,6 +57,13 @@ func (e *Executor) reportStatus(ctx context.Context, d store.Deployment, state, 
 
 // Handle dispatches a job event from the bus.
 func (e *Executor) Handle(ctx context.Context, ev domain.JobEvent) error {
+	ctx, span := telemetry.Tracer().Start(
+		telemetry.ExtractTraceParent(ctx, ev.TraceParent), "worker."+ev.Type,
+		trace.WithAttributes(
+			attribute.String("shippulse.aggregate_id", ev.AggregateID),
+			attribute.String("shippulse.correlation_id", ev.CorrelationID),
+		))
+	defer span.End()
 	switch ev.Type {
 	case domain.EventDeploymentRequested:
 		return e.RunDeployment(ctx, ev.AggregateID)
@@ -99,6 +110,14 @@ func (e *Executor) RunDeployment(ctx context.Context, id string) error {
 	return err
 }
 
+// step wraps one workflow step in a span so a deployment trace shows
+// validate/apply/probe/promote as children of worker.deployment.requested.
+func step(ctx context.Context, name string, fn func(context.Context) error) error {
+	sctx, sp := telemetry.Tracer().Start(ctx, "step."+name)
+	defer sp.End()
+	return fn(sctx)
+}
+
 func (e *Executor) runSteps(ctx context.Context, d store.Deployment, done map[string]bool, log *slog.Logger) error {
 	owner := e.Cfg.WorkerID
 	fail := func(f store.Failure) error {
@@ -112,49 +131,61 @@ func (e *Executor) runSteps(ctx context.Context, d store.Deployment, done map[st
 	}
 
 	if !done[domain.StepValidate] {
-		if err := e.Store.StartStep(ctx, d, owner, domain.StepValidate); err != nil {
-			return err
-		}
-		vd, err := e.Store.ValidateTarget(ctx, d, owner)
-		if errors.Is(err, domain.ErrNotFound) {
-			return fail(store.Failure{Step: domain.StepValidate, Code: domain.CodeTargetNotFound, Message: err.Error()})
-		}
+		err := step(ctx, domain.StepValidate, func(sctx context.Context) error {
+			if err := e.Store.StartStep(sctx, d, owner, domain.StepValidate); err != nil {
+				return err
+			}
+			vd, err := e.Store.ValidateTarget(sctx, d, owner)
+			if errors.Is(err, domain.ErrNotFound) {
+				return fail(store.Failure{Step: domain.StepValidate, Code: domain.CodeTargetNotFound, Message: err.Error()})
+			}
+			if err != nil {
+				return err
+			}
+			d = vd
+			return nil
+		})
 		if err != nil {
 			return err
 		}
-		d = vd
 	}
 
 	if !done[domain.StepApplyVersion] {
-		if err := e.Store.StartStep(ctx, d, owner, domain.StepApplyVersion); err != nil {
-			return err
-		}
-		tries, err := e.apply(ctx, target(d), d.Version, domain.FailureProfile(d.FailureProfile))
+		err := step(ctx, domain.StepApplyVersion, func(sctx context.Context) error {
+			if err := e.Store.StartStep(sctx, d, owner, domain.StepApplyVersion); err != nil {
+				return err
+			}
+			tries, err := e.apply(sctx, target(d), d.Version, domain.FailureProfile(d.FailureProfile))
+			if err != nil {
+				// The provider rejected the change, so the runtime still runs the previous version.
+				return fail(store.Failure{Step: domain.StepApplyVersion, Code: domain.CodeProviderUnavailable,
+					Message: fmt.Sprintf("provider unavailable after %d attempts", tries)})
+			}
+			return e.Store.CompleteStep(sctx, d, owner, domain.StepApplyVersion,
+				fmt.Sprintf("applied %s to %s/%s (attempts: %d)", d.Version, d.ServiceSlug, d.EnvironmentSlug, tries))
+		})
 		if err != nil {
-			// The provider rejected the change, so the runtime still runs the previous version.
-			return fail(store.Failure{Step: domain.StepApplyVersion, Code: domain.CodeProviderUnavailable,
-				Message: fmt.Sprintf("provider unavailable after %d attempts", tries)})
-		}
-		if err := e.Store.CompleteStep(ctx, d, owner, domain.StepApplyVersion,
-			fmt.Sprintf("applied %s to %s/%s (attempts: %d)", d.Version, d.ServiceSlug, d.EnvironmentSlug, tries)); err != nil {
 			return err
 		}
 	}
 
 	if !done[domain.StepHealthProbe] {
-		if err := e.Store.StartStep(ctx, d, owner, domain.StepHealthProbe); err != nil {
-			return err
-		}
-		tries, code, _ := provider.ProbeUntilHealthy(ctx, e.Provider, target(d), e.Cfg.Probe)
-		if code != "" {
-			if ctx.Err() != nil {
-				return ctx.Err()
+		err := step(ctx, domain.StepHealthProbe, func(sctx context.Context) error {
+			if err := e.Store.StartStep(sctx, d, owner, domain.StepHealthProbe); err != nil {
+				return err
 			}
-			return fail(store.Failure{Step: domain.StepHealthProbe, Code: code, Rollback: true,
-				Message: fmt.Sprintf("%s after %d probe(s) of %s", code, tries, d.Version)})
-		}
-		if err := e.Store.CompleteStep(ctx, d, owner, domain.StepHealthProbe,
-			fmt.Sprintf("healthy after %d probe(s)", tries)); err != nil {
+			tries, code, _ := provider.ProbeUntilHealthy(sctx, e.Provider, target(d), e.Cfg.Probe)
+			if code != "" {
+				if sctx.Err() != nil {
+					return sctx.Err()
+				}
+				return fail(store.Failure{Step: domain.StepHealthProbe, Code: code, Rollback: true,
+					Message: fmt.Sprintf("%s after %d probe(s) of %s", code, tries, d.Version)})
+			}
+			return e.Store.CompleteStep(sctx, d, owner, domain.StepHealthProbe,
+				fmt.Sprintf("healthy after %d probe(s)", tries))
+		})
+		if err != nil {
 			return err
 		}
 	}
@@ -166,31 +197,36 @@ func (e *Executor) runSteps(ctx context.Context, d store.Deployment, done map[st
 		if !ok || done[st.Name] {
 			continue
 		}
-		if err := e.Store.StartStep(ctx, d, owner, st.Name); err != nil {
-			return err
-		}
-		if err := e.Provider.SetTraffic(ctx, target(d), w); err != nil {
-			return fail(store.Failure{Step: st.Name, Code: domain.CodeProviderUnavailable,
-				Message: fmt.Sprintf("traffic shift to %d%% rejected: %v", w, err)})
-		}
-		tries, code, _ := provider.ProbeUntilHealthy(ctx, e.Provider, target(d), e.Cfg.Probe)
-		if code != "" {
-			if ctx.Err() != nil {
-				return ctx.Err()
+		err := step(ctx, st.Name, func(sctx context.Context) error {
+			if err := e.Store.StartStep(sctx, d, owner, st.Name); err != nil {
+				return err
 			}
-			return fail(store.Failure{Step: st.Name, Code: code, Rollback: true,
-				Message: fmt.Sprintf("%s at %d%% traffic after %d probe(s)", code, w, tries)})
-		}
-		if err := e.Store.CompleteStep(ctx, d, owner, st.Name,
-			fmt.Sprintf("%d%% traffic healthy after %d probe(s)", w, tries)); err != nil {
+			if err := e.Provider.SetTraffic(sctx, target(d), w); err != nil {
+				return fail(store.Failure{Step: st.Name, Code: domain.CodeProviderUnavailable,
+					Message: fmt.Sprintf("traffic shift to %d%% rejected: %v", w, err)})
+			}
+			tries, code, _ := provider.ProbeUntilHealthy(sctx, e.Provider, target(d), e.Cfg.Probe)
+			if code != "" {
+				if sctx.Err() != nil {
+					return sctx.Err()
+				}
+				return fail(store.Failure{Step: st.Name, Code: code, Rollback: true,
+					Message: fmt.Sprintf("%s at %d%% traffic after %d probe(s)", code, w, tries)})
+			}
+			return e.Store.CompleteStep(sctx, d, owner, st.Name,
+				fmt.Sprintf("%d%% traffic healthy after %d probe(s)", w, tries))
+		})
+		if err != nil {
 			return err
 		}
 	}
 
-	if err := e.Store.StartStep(ctx, d, owner, domain.StepPromote); err != nil {
-		return err
-	}
-	if err := e.Store.Promote(ctx, d, owner); err != nil {
+	if err := step(ctx, domain.StepPromote, func(sctx context.Context) error {
+		if err := e.Store.StartStep(sctx, d, owner, domain.StepPromote); err != nil {
+			return err
+		}
+		return e.Store.Promote(sctx, d, owner)
+	}); err != nil {
 		return err
 	}
 	log.Info("deployment succeeded")

@@ -31,6 +31,7 @@ import (
 	"github.com/tatitoxt/shippulse/internal/seed"
 	"github.com/tatitoxt/shippulse/internal/simruntime"
 	"github.com/tatitoxt/shippulse/internal/store"
+	"github.com/tatitoxt/shippulse/internal/telemetry"
 	"github.com/tatitoxt/shippulse/internal/worker"
 )
 
@@ -42,6 +43,12 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	shutdownTelemetry, terr := telemetry.Setup(ctx, "shippulse")
+	if terr != nil {
+		log.Warn("telemetry disabled", "err", terr)
+	}
+	defer func() { _ = shutdownTelemetry(context.Background()) }()
 
 	var err error
 	switch cmd := os.Args[1]; cmd {

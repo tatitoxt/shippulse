@@ -14,6 +14,10 @@ import (
 	"github.com/tatitoxt/shippulse/internal/provider"
 	"github.com/tatitoxt/shippulse/internal/simruntime"
 	"github.com/tatitoxt/shippulse/internal/store"
+	"github.com/tatitoxt/shippulse/internal/telemetry"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // dummyHash keeps login timing similar for unknown emails.
@@ -166,7 +170,13 @@ func (s *Server) createDeployment(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	p := principal(r)
-	d, created, err := s.Store.CreateDeployment(r.Context(), store.CreateDeploymentInput{
+	ctx, span := telemetry.Tracer().Start(r.Context(), "api.deployment.create",
+		trace.WithAttributes(
+			attribute.String("shippulse.service_id", body.ServiceID),
+			attribute.String("shippulse.environment_id", body.EnvironmentID),
+			attribute.String("shippulse.version", body.Version)))
+	defer span.End()
+	d, created, err := s.Store.CreateDeployment(ctx, store.CreateDeploymentInput{
 		OrganizationID: p.OrganizationID, ServiceID: body.ServiceID, EnvironmentID: body.EnvironmentID,
 		Version: body.Version, FailureProfile: string(profile), IdempotencyKey: key,
 		Source: "manual", Actor: p.Email, Canary: body.Canary, CorrelationID: correlationID(r),

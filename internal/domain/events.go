@@ -16,4 +16,7 @@ type JobEvent struct {
 	OrganizationID string `json:"organization_id"`
 	AggregateID    string `json:"aggregate_id"`
 	CorrelationID  string `json:"correlation_id"`
+	// TraceParent carries the W3C traceparent of the request that created the
+	// job, so the worker's spans join the same distributed trace.
+	TraceParent string `json:"traceparent,omitempty"`
 }

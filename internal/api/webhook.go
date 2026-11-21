@@ -12,6 +12,10 @@ import (
 
 	"github.com/tatitoxt/shippulse/internal/domain"
 	"github.com/tatitoxt/shippulse/internal/store"
+	"github.com/tatitoxt/shippulse/internal/telemetry"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // VerifySignature checks GitHub's X-Hub-Signature-256 header in constant time.
@@ -113,7 +117,11 @@ func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 	if ev.Sender.Login != "" {
 		actor = "github:" + ev.Sender.Login
 	}
-	d, created, err := s.Store.CreateDeployment(r.Context(), store.CreateDeploymentInput{
+	ctx, span := telemetry.Tracer().Start(r.Context(), "api.github.deployment",
+		trace.WithAttributes(attribute.String("github.delivery", delivery),
+			attribute.String("github.sha", ev.Deployment.SHA)))
+	defer span.End()
+	d, created, err := s.Store.CreateDeployment(ctx, store.CreateDeploymentInput{
 		OrganizationID: org, ServiceID: serviceID, EnvironmentID: envID, Version: version,
 		FailureProfile: string(profile), IdempotencyKey: "github:" + delivery, Source: "github",
 		Actor: actor, GitSHA: ev.Deployment.SHA, CorrelationID: correlationID(r),

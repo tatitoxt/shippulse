@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/tatitoxt/shippulse/internal/domain"
+	"github.com/tatitoxt/shippulse/internal/telemetry"
 )
 
 type Store struct {
@@ -90,6 +91,7 @@ func insertOutbox(ctx context.Context, tx pgx.Tx, org, aggregateID, eventType, c
 	payload, err := json.Marshal(domain.JobEvent{
 		EventID: id, Type: eventType, PayloadVersion: 1,
 		OrganizationID: org, AggregateID: aggregateID, CorrelationID: corr,
+		TraceParent: telemetry.TraceParent(ctx),
 	})
 	if err != nil {
 		return err

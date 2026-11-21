@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,8 +19,13 @@ import (
 	"github.com/tatitoxt/shippulse/internal/outbox"
 	"github.com/tatitoxt/shippulse/internal/provider"
 	"github.com/tatitoxt/shippulse/internal/store"
+	"github.com/tatitoxt/shippulse/internal/telemetry"
 	"github.com/tatitoxt/shippulse/internal/testutil"
 	"github.com/tatitoxt/shippulse/internal/worker"
+
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 type harness struct {
@@ -378,5 +384,65 @@ func TestCanaryDeploymentRollsBackOnUnhealthyWeight(t *testing.T) {
 	}
 	if got := stepStatus(d)["canary_10"]; got != "" && got != "skipped" && got != "failed" {
 		t.Fatalf("canary_10 = %s", got)
+	}
+}
+
+// A trace started by the API must continue inside the worker: the
+// traceparent rides in the outbox payload, so the worker's span shares the
+// deployment's trace id instead of starting a disconnected trace.
+func TestWorkerContinuesTheDeploymentTrace(t *testing.T) {
+	sr := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() { otel.SetTracerProvider(prev) })
+
+	h := start(t)
+	ctx, apiSpan := telemetry.Tracer().Start(context.Background(), "api.deployment.create")
+	d, _, err := h.s.CreateDeployment(ctx, store.CreateDeploymentInput{
+		OrganizationID: h.tg.Org, ServiceID: h.tg.Service, EnvironmentID: h.tg.Env,
+		Version: "traced-1", FailureProfile: string(domain.ProfileHealthy),
+		IdempotencyKey: uuid.NewString(), Source: "manual",
+		Actor: "operator@acme.example", CorrelationID: uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	apiSpan.End()
+	h.wait(t, d.ID)
+	_ = tp.Shutdown(context.Background())
+
+	spans := sr.Ended()
+	var workerSpan sdktrace.ReadOnlySpan
+	var steps []string
+	for _, sp := range spans {
+		if sp.Name() == "worker."+domain.EventDeploymentRequested {
+			workerSpan = sp
+		}
+		if strings.HasPrefix(sp.Name(), "step.") {
+			steps = append(steps, sp.Name())
+		}
+	}
+	if workerSpan == nil {
+		t.Fatalf("no worker span recorded; spans: %v", spans)
+	}
+	if workerSpan.SpanContext().TraceID() != apiSpan.SpanContext().TraceID() {
+		t.Fatalf("worker trace %s does not match api trace %s",
+			workerSpan.SpanContext().TraceID(), apiSpan.SpanContext().TraceID())
+	}
+	if workerSpan.Parent().SpanID() != apiSpan.SpanContext().SpanID() {
+		t.Fatal("worker span is not a child of the api span")
+	}
+	for _, want := range []string{"step." + domain.StepValidate, "step." + domain.StepApplyVersion,
+		"step." + domain.StepHealthProbe, "step." + domain.StepPromote} {
+		found := false
+		for _, got := range steps {
+			if got == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("missing step span %s; got %v", want, steps)
+		}
 	}
 }

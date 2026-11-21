@@ -42,8 +42,9 @@ that an operator can see the evidence afterwards.
   metadata keys are redacted.
 - **Live updates over SSE**: `GET /api/v1/events` streams org-scoped change events emitted by
   Postgres `LISTEN/NOTIFY` triggers on `deployments`, `deployment_steps` and
-  `service_environments`. The console refreshes instantly on each event and keeps a 30 s poll
-  as a backstop, so it works across API/worker process boundaries without a broker.
+  `service_environments`. A single dedicated `LISTEN` connection fans out to all subscribers
+  in-process, so any number of open consoles costs exactly one database connection. The console
+  refreshes instantly on each event and keeps a 30 s poll as a backstop.
 - **Web console** (Next.js): services with promoted vs. actually-running version, deploy form,
   deployment list, per-deployment steps, rollback and runtime evidence, audit trail.
 - **Multi-tenant**: two synthetic organizations (`Acme Demo`, `Globex Demo`); every query is
@@ -135,7 +136,7 @@ One Go module, one binary with subcommands (`migrate`, `seed`, `api`, `worker`, 
 | Audits | `make vuln` | govulncheck and `npm audit --audit-level=high` |
 
 Measured in this repository (count them with `go test -list . ./...` and
-`go test -tags=integration -list . ./...`): 55 Go test functions — 22 unit and 33 integration —
+`go test -tags=integration -list . ./...`): 56 Go test functions — 22 unit and 34 integration —
 plus 3 Playwright E2E tests. The SSE endpoint is covered by live integration tests that drive a
 deployment through real `pg_notify` triggers and assert org isolation on the stream. All of them run in [GitHub Actions](.github/workflows/ci.yml) on every
 pull request and push to `main`, together with `make demo`.
@@ -150,9 +151,8 @@ pull request and push to `main`, together with `make demo`.
   the GitHub API back (no deployment statuses).
 - Authentication is email/password with HS256 JWTs for seeded demo users. There is no sign-up,
   password reset, SSO, token revocation or rate limiting.
-- The SSE stream is push-only within one API process view of Postgres notifications; there is
-  no event replay after reconnect beyond the client's refresh, and no SSE fallback for clients
-  that block `EventSource`.
+- The SSE stream has no replay: an event missed between disconnect and reconnect is only caught
+  by the 30 s poll backstop, and there is no fallback for clients that block `EventSource`.
 - No metrics/tracing pipeline: logs are structured JSON with correlation ids only.
 - Not security-audited and not deployed anywhere; the Compose file is for local demos.
 

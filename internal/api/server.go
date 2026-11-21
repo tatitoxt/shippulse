@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -25,6 +26,16 @@ type Server struct {
 	Runtime       provider.Provider // used read-only to show the observed runtime
 	WebhookSecret string            // GitHub webhook HMAC secret; empty disables the endpoint
 	Log           *slog.Logger
+
+	notifier     *notifier
+	notifierOnce sync.Once
+}
+
+// events returns the shared change notifier, started lazily on the first SSE
+// request so servers without streaming clients never open a LISTEN connection.
+func (s *Server) events() *notifier {
+	s.notifierOnce.Do(func() { s.notifier = newNotifier(s.Store.Pool, s.Log) })
+	return s.notifier
 }
 
 type ctxKey int

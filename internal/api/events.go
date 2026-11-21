@@ -3,10 +3,14 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"sync"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // changeNotification is the payload emitted by the shippulse_notify_change
@@ -14,6 +18,89 @@ import (
 type changeNotification struct {
 	Org    string          `json:"org"`
 	Change json.RawMessage `json:"change"`
+}
+
+// notifier fans database change notifications out to SSE subscribers over a
+// single dedicated LISTEN connection. Pooling a connection per client would
+// starve the API when several consoles are open, so the LISTEN conn is opened
+// directly (never counted against MaxConns) and events are broadcast
+// in-process. A client that vanishes costs only a goroutine until the handler
+// notices, never a database connection.
+type notifier struct {
+	pool *pgxpool.Pool // config source only
+	log  *slog.Logger
+
+	mu   sync.Mutex
+	subs map[chan changeNotification]struct{}
+}
+
+func newNotifier(pool *pgxpool.Pool, log *slog.Logger) *notifier {
+	n := &notifier{pool: pool, log: log, subs: map[chan changeNotification]struct{}{}}
+	go n.run()
+	return n
+}
+
+func (n *notifier) subscribe() chan changeNotification {
+	ch := make(chan changeNotification, 256)
+	n.mu.Lock()
+	n.subs[ch] = struct{}{}
+	n.mu.Unlock()
+	return ch
+}
+
+func (n *notifier) unsubscribe(ch chan changeNotification) {
+	n.mu.Lock()
+	delete(n.subs, ch)
+	n.mu.Unlock()
+}
+
+// run keeps the LISTEN connection alive for the process lifetime, reconnecting
+// after drops. WaitForNotification fails on conn loss; stale events are not
+// replayed (clients refresh anyway).
+func (n *notifier) run() {
+	for {
+		if err := n.listen(context.Background()); err != nil {
+			n.log.Warn("change listener ended; reconnecting", "err", err)
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+func (n *notifier) listen(ctx context.Context) error {
+	conn, err := pgx.ConnectConfig(ctx, n.pool.Config().ConnConfig)
+	if err != nil {
+		return err
+	}
+	defer conn.Close(context.Background())
+	if _, err := conn.Exec(ctx, "LISTEN shippulse_changes"); err != nil {
+		return err
+	}
+	n.log.Info("listening for change notifications")
+	for {
+		msg, err := conn.WaitForNotification(ctx)
+		if err != nil {
+			return err
+		}
+		var cn changeNotification
+		if err := json.Unmarshal([]byte(msg.Payload), &cn); err != nil {
+			n.log.Warn("bad notification payload", "err", err)
+			continue
+		}
+		n.broadcast(cn)
+	}
+}
+
+func (n *notifier) broadcast(cn changeNotification) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for ch := range n.subs {
+		select {
+		case ch <- cn:
+		default:
+			// Subscriber buffer full: the client is wedged or gone. Dropping
+			// the event is safe — the poll backstop still refreshes it.
+		}
+	}
 }
 
 // streamEvents serves GET /api/v1/events as an org-scoped Server-Sent Events
@@ -27,17 +114,9 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := s.Store.Pool.Acquire(r.Context())
-	if err != nil {
-		s.internal(w, r, fmt.Errorf("acquire listen conn: %w", err))
-		return
-	}
-	defer conn.Release()
-
-	if _, err := conn.Exec(r.Context(), "LISTEN shippulse_changes"); err != nil {
-		s.internal(w, r, fmt.Errorf("listen: %w", err))
-		return
-	}
+	n := s.events()
+	ch := n.subscribe()
+	defer n.unsubscribe(ch)
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -48,36 +127,27 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 
 	org := principal(r).OrganizationID
+	heartbeat := time.NewTicker(25 * time.Second)
+	defer heartbeat.Stop()
 	for {
-		// Block up to the heartbeat interval; on timeout emit a comment line so
-		// proxies and browsers do not consider the stream stalled.
-		waitCtx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
-		n, err := conn.Conn().WaitForNotification(waitCtx)
-		cancel()
-		if err != nil {
-			if errors.Is(err, context.DeadlineExceeded) && r.Context().Err() == nil {
-				if _, err := fmt.Fprint(w, ": keep-alive\n\n"); err != nil {
-					return
-				}
-				flusher.Flush()
+		select {
+		case <-r.Context().Done():
+			return
+		case note := <-ch:
+			if note.Org != org {
 				continue
 			}
-			if r.Context().Err() == nil {
-				s.Log.Warn("event stream ended", "err", err, "correlation_id", correlationID(r))
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", note.Change); err != nil {
+				return
 			}
-			return
+			flusher.Flush()
+		case <-heartbeat.C:
+			// Comment line so proxies and browsers do not consider the stream
+			// stalled; also flushes dead connections.
+			if _, err := fmt.Fprint(w, ": keep-alive\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
 		}
-		var note changeNotification
-		if err := json.Unmarshal([]byte(n.Payload), &note); err != nil {
-			s.Log.Warn("bad notification payload", "err", err, "correlation_id", correlationID(r))
-			continue
-		}
-		if note.Org != org {
-			continue
-		}
-		if _, err := fmt.Fprintf(w, "data: %s\n\n", note.Change); err != nil {
-			return
-		}
-		flusher.Flush()
 	}
 }

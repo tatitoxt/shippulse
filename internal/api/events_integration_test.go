@@ -155,6 +155,38 @@ func TestEventStreamDoesNotLeakAcrossOrgs(t *testing.T) {
 	}
 }
 
+func TestEventStreamSharesOneListenConnection(t *testing.T) {
+	base, s := newEventServer(t)
+	acme := testutil.Lookup(t, s, "acme-demo", "checkout-api", "staging")
+	c := login(t, base, "operator@acme.example")
+
+	// More concurrent streams than the pgx pool hands out by default; a
+	// conn-per-client design would starve the API here. The shared LISTEN
+	// connection must leave the pool untouched.
+	const streams = 8
+	chans := make([]chan string, 0, streams)
+	for i := 0; i < streams; i++ {
+		chans = append(chans, openStream(t, base, c.token))
+	}
+	if n := s.Pool.Stat().AcquiredConns(); n != 0 {
+		t.Fatalf("streams pinned %d pooled connections", n)
+	}
+	code, _ := c.do("GET", "/api/v1/services", nil, nil)
+	if code != http.StatusOK {
+		t.Fatalf("api unavailable with %d open streams: %d", streams, code)
+	}
+
+	// One change still reaches every subscriber.
+	setDeploymentStatus(t, s, createDeployment(t, c, acme, "9.9.9"), "running")
+	for i, ch := range chans {
+		select {
+		case <-ch:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("stream %d did not receive the event", i)
+		}
+	}
+}
+
 func TestEventStreamRequiresAuth(t *testing.T) {
 	base, _ := newEventServer(t)
 	resp, err := http.Get(fmt.Sprintf("%s/api/v1/events", base))

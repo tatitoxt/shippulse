@@ -31,6 +31,9 @@ async function proxy(req: NextRequest): Promise<Response> {
       headers,
       body: hasBody ? await req.arrayBuffer() : undefined,
       cache: "no-store",
+      // Abort the upstream request when the downstream client disconnects, so
+      // SSE streams (and slow responses) do not pin server resources forever.
+      signal: req.signal,
     });
     const out = new Headers();
     for (const h of ["content-type", "x-correlation-id"]) {

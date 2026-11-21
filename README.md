@@ -51,7 +51,12 @@ that an operator can see the evidence afterwards.
   named `<service>-<environment>` in `KUBECTL_NAMESPACE` (default `default`), applies via
   `kubectl set image`, probes by ready replicas, and — with `CANARY_INGRESS=true` —
   drives canary weights through the NGINX Ingress `canary-weight` annotation on an
-  Ingress named like the Deployment.
+  Ingress named like the Deployment. `PROVIDER=nomad` targets the Nomad HTTP API
+  (`NOMAD_ADDR`, optional `NOMAD_TOKEN`/`NOMAD_IMAGE_PREFIX`): `Apply` registers a
+  `<service>-<environment>` docker job, `Probe` requires job status `running`,
+  and `SetTraffic` promotes the latest deployment at 100% (intermediate canary
+  steps only add bake time — Nomad canaries gate on task counts, not traffic
+  weight).
 - **Automatic rollback**: a failed health probe marks the deployment `failed` and queues a
   separate rollback operation that re-applies and re-probes the previous stable version.
   Rollbacks that fail are reported as failed (never as "rolled back") and can be retried manually.
@@ -177,10 +182,6 @@ pull request and push to `main`, together with `make demo`.
   by the 30 s poll backstop, and there is no fallback for clients that block `EventSource`.
 - No metrics/tracing pipeline: logs are structured JSON with correlation ids only.
 - Not security-audited and not deployed anywhere; the Compose file is for local demos.
-
-## Roadmap
-
-- A real provider backend beyond `kubectl` (e.g. Nomad, ECS) for non-Kubernetes targets.
 
 ## License
 

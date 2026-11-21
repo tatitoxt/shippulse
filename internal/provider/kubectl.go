@@ -123,11 +123,16 @@ func (k *Kubectl) Status(ctx context.Context, t Target) (simruntime.Status, erro
 var _ Provider = (*Kubectl)(nil)
 
 // FromEnv selects the provider implementation: the simulated runtime over HTTP
-// is the default; PROVIDER=kubectl switches to the real Kubernetes backend.
+// is the default; PROVIDER=kubectl switches to the real Kubernetes backend,
+// PROVIDER=nomad to the Nomad HTTP API.
 func FromEnv(runtimeURL string) Provider {
-	if strings.EqualFold(os.Getenv("PROVIDER"), "kubectl") {
+	switch strings.ToLower(os.Getenv("PROVIDER")) {
+	case "kubectl":
 		return NewKubectl(os.Getenv("KUBECTL_NAMESPACE"), os.Getenv("KUBECTL_BIN"),
 			strings.EqualFold(os.Getenv("CANARY_INGRESS"), "true"))
+	case "nomad":
+		return NewNomad(os.Getenv("NOMAD_ADDR"), os.Getenv("NOMAD_TOKEN"),
+			os.Getenv("NOMAD_IMAGE_PREFIX"))
 	}
 	return NewHTTP(runtimeURL)
 }

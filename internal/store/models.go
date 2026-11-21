@@ -77,6 +77,7 @@ type Deployment struct {
 	Source               string     `json:"source"`
 	Actor                string     `json:"actor"`
 	GitSHA               *string    `json:"git_sha"`
+	Repository           *string    `json:"repository"`
 	Status               string     `json:"status"`
 	PreviousVersion      *string    `json:"previous_version"`
 	PreviousDeploymentID *string    `json:"previous_deployment_id"`

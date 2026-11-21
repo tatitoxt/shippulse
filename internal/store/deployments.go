@@ -11,7 +11,8 @@ import (
 )
 
 const deploymentColumns = `d.id, d.organization_id, d.service_id, s.slug, d.environment_id, e.slug, d.version,
-	d.failure_profile, d.source, d.actor, d.git_sha, d.status, d.previous_version, d.previous_deployment_id,
+	d.failure_profile, d.source, d.actor, d.git_sha, s.repository_full_name, d.status,
+	d.previous_version, d.previous_deployment_id,
 	d.error_code, d.error_message, d.correlation_id, d.attempts, d.created_at, d.started_at, d.finished_at`
 
 const deploymentFrom = ` FROM deployments d
@@ -21,7 +22,7 @@ const deploymentFrom = ` FROM deployments d
 func scanDeployment(r pgx.Row) (Deployment, error) {
 	var d Deployment
 	err := r.Scan(&d.ID, &d.OrganizationID, &d.ServiceID, &d.ServiceSlug, &d.EnvironmentID, &d.EnvironmentSlug,
-		&d.Version, &d.FailureProfile, &d.Source, &d.Actor, &d.GitSHA, &d.Status, &d.PreviousVersion,
+		&d.Version, &d.FailureProfile, &d.Source, &d.Actor, &d.GitSHA, &d.Repository, &d.Status, &d.PreviousVersion,
 		&d.PreviousDeploymentID, &d.ErrorCode, &d.ErrorMessage, &d.CorrelationID, &d.Attempts,
 		&d.CreatedAt, &d.StartedAt, &d.FinishedAt)
 	return d, err

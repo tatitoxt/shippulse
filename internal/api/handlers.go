@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -212,6 +213,10 @@ func (s *Server) cancelDeployment(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.domainError(w, r, err)
 		return
+	}
+	if s.Statuses != nil && d.GitSHA != nil && d.Repository != nil {
+		s.Statuses.ReportLogged(r.Context(), *d.Repository, *d.GitSHA, d.EnvironmentSlug, d.ID,
+			"error", fmt.Sprintf("deploy of %s cancelled by %s", d.Version, p.Email))
 	}
 	writeJSON(w, http.StatusOK, d)
 }

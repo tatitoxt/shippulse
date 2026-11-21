@@ -45,6 +45,11 @@ that an operator can see the evidence afterwards.
   `service_environments`. A single dedicated `LISTEN` connection fans out to all subscribers
   in-process, so any number of open consoles costs exactly one database connection. The console
   refreshes instantly on each event and keeps a 30 s poll as a backstop.
+- **GitHub commit statuses**: when `GITHUB_TOKEN` is set, the worker posts `pending` →
+  `success`/`failure` statuses (context `shippulse/<environment>`) back to the deployment's
+  `git_sha`, and the API posts `error` when a queued deploy is cancelled. Reporting is
+  best-effort — a GitHub failure is logged, never fails the deploy. `GITHUB_API_URL`
+  overrides the API base (e.g. GHES) and `STATUS_TARGET_BASE` links statuses to a dashboard.
 - **Web console** (Next.js): services with promoted vs. actually-running version, deploy form,
   deployment list, per-deployment steps, rollback and runtime evidence, audit trail.
 - **Multi-tenant**: two synthetic organizations (`Acme Demo`, `Globex Demo`); every query is
@@ -147,8 +152,8 @@ pull request and push to `main`, together with `make demo`.
   and "health" is decided by the failure profile chosen at deploy time.
 - Single worker process in the demo; multiple workers are supported by leases and are covered by
   integration tests, not by a load test. No performance numbers have been measured.
-- GitHub integration is limited to receiving signed `deployment` events; ShipPulse does not call
-  the GitHub API back (no deployment statuses).
+- GitHub integration is limited to receiving signed `deployment` events plus opt-in
+  commit statuses (`GITHUB_TOKEN`); ShipPulse does not create GitHub Deployments itself.
 - Authentication is email/password with HS256 JWTs for seeded demo users. There is no sign-up,
   password reset, SSO, token revocation or rate limiting.
 - The SSE stream has no replay: an event missed between disconnect and reconnect is only caught
@@ -158,7 +163,6 @@ pull request and push to `main`, together with `make demo`.
 
 ## Roadmap
 
-- Report deployment statuses back to GitHub.
 - Canary/progressive steps with real metrics as rollback signals.
 - A real provider (for example a Kubernetes Deployment) behind the existing `Provider` interface, opt-in via configuration.
 - OpenTelemetry traces across API → outbox → worker using the existing correlation id.

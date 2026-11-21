@@ -16,6 +16,7 @@ import (
 
 	"github.com/tatitoxt/shippulse/internal/auth"
 	"github.com/tatitoxt/shippulse/internal/domain"
+	"github.com/tatitoxt/shippulse/internal/ghstatus"
 	"github.com/tatitoxt/shippulse/internal/provider"
 	"github.com/tatitoxt/shippulse/internal/store"
 )
@@ -23,8 +24,9 @@ import (
 type Server struct {
 	Store         *store.Store
 	Auth          *auth.Issuer
-	Runtime       provider.Provider // used read-only to show the observed runtime
-	WebhookSecret string            // GitHub webhook HMAC secret; empty disables the endpoint
+	Runtime       provider.Provider  // used read-only to show the observed runtime
+	WebhookSecret string             // GitHub webhook HMAC secret; empty disables the endpoint
+	Statuses      *ghstatus.Reporter // best-effort GitHub commit statuses; nil/disabled = no-op
 	Log           *slog.Logger
 
 	notifier     *notifier

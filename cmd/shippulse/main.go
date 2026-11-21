@@ -24,6 +24,7 @@ import (
 	"github.com/tatitoxt/shippulse/internal/bus"
 	"github.com/tatitoxt/shippulse/internal/config"
 	"github.com/tatitoxt/shippulse/internal/demo"
+	"github.com/tatitoxt/shippulse/internal/ghstatus"
 	"github.com/tatitoxt/shippulse/internal/migrate"
 	"github.com/tatitoxt/shippulse/internal/outbox"
 	"github.com/tatitoxt/shippulse/internal/provider"
@@ -108,6 +109,17 @@ func runSeed(ctx context.Context, log *slog.Logger) error {
 	return nil
 }
 
+// statusReporter builds the shared GitHub commit-status reporter; it is a
+// no-op (Enabled() == false) unless GITHUB_TOKEN is set.
+func statusReporter(log *slog.Logger) *ghstatus.Reporter {
+	return &ghstatus.Reporter{
+		Token:      os.Getenv("GITHUB_TOKEN"),
+		BaseURL:    os.Getenv("GITHUB_API_URL"),
+		TargetBase: os.Getenv("STATUS_TARGET_BASE"),
+		Log:        log,
+	}
+}
+
 func runAPI(ctx context.Context, log *slog.Logger) error {
 	issuer, err := auth.NewIssuer(os.Getenv("JWT_SECRET"), config.Duration("JWT_TTL", 8*time.Hour))
 	if err != nil {
@@ -122,6 +134,7 @@ func runAPI(ctx context.Context, log *slog.Logger) error {
 		Store: s, Auth: issuer, Log: log,
 		Runtime:       provider.NewHTTP(config.RuntimeURL()),
 		WebhookSecret: os.Getenv("GITHUB_WEBHOOK_SECRET"),
+		Statuses:      statusReporter(log),
 	}
 	return serve(ctx, log, config.String("API_ADDR", ":8080"), srv.Router())
 }
@@ -143,7 +156,8 @@ func runWorker(ctx context.Context, log *slog.Logger) error {
 	cfg.Probe.Attempts = config.Int("HEALTH_PROBE_ATTEMPTS", cfg.Probe.Attempts)
 	cfg.Probe.Timeout = config.Duration("HEALTH_PROBE_TIMEOUT", cfg.Probe.Timeout)
 	cfg.Probe.Interval = config.Duration("HEALTH_PROBE_INTERVAL", cfg.Probe.Interval)
-	exec := &worker.Executor{Store: s, Provider: provider.NewHTTP(config.RuntimeURL()), Cfg: cfg, Log: log}
+	exec := &worker.Executor{Store: s, Provider: provider.NewHTTP(config.RuntimeURL()), Cfg: cfg,
+		Log: log, Statuses: statusReporter(log)}
 
 	relay := &outbox.Relay{Store: s, Publish: b.Publish, Interval: 250 * time.Millisecond, Batch: 50,
 		Base: 500 * time.Millisecond, Max: 30 * time.Second, Log: log}

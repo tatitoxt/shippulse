@@ -40,7 +40,11 @@ that an operator can see the evidence afterwards.
   any other. With `CANARY_METRICS_URL` + `CANARY_METRICS_QUERY` + `CANARY_METRICS_THRESHOLD`
   set, each weight is also gated on a real error signal: the worker evaluates a Prometheus
   instant query (any compatible API — Prometheus, VictoriaMetrics, Mimir) and rolls back
-  when the scalar result exceeds the threshold or the query fails (fail-closed). The simulated runtime
+  when the scalar result exceeds the threshold or the query fails (fail-closed).
+  `CANARY_METRICS_CHECKS` widens the gate to several named checks — a JSON array of
+  `{"name", "query", "threshold"}` so a scalar error-rate check can run alongside
+  `histogram_quantile` latency checks (e.g.
+  `[{"name":"p99","query":"histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m]))","threshold":0.5}]`); every check must pass, and rollback names the breached check. The simulated runtime
   supports the failure profiles `healthy`, `unhealthy`, `timeout` and `provider_unavailable`.
 - **Real provider (opt-in)**: `PROVIDER=kubectl` swaps the simulated runtime for a real
   Kubernetes backend driven by the `kubectl` CLI. It maps each target to a Deployment
@@ -176,7 +180,7 @@ pull request and push to `main`, together with `make demo`.
 
 ## Roadmap
 
-- Histogram canary analysis (e.g. Prometheus `histogram_quantile` latency checks) alongside the scalar threshold probe.
+- A real provider backend beyond `kubectl` (e.g. Nomad, ECS) for non-Kubernetes targets.
 
 ## License
 

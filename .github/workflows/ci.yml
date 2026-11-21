@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go lint, unit tests and govulncheck
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.11"
+      - name: gofmt
+        run: test -z "$(gofmt -l cmd internal)" || (gofmt -l cmd internal; exit 1)
+      - name: go vet
+        run: go vet ./... && go vet -tags=integration ./...
+      - name: Unit tests
+        run: go test -race -count=1 ./...
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+
+  integration:
+    name: Go integration tests (PostgreSQL + NATS)
+    runs-on: ubuntu-24.04
+    env:
+      TEST_DATABASE_URL: postgres://shippulse:shippulse@localhost:5432/shippulse?sslmode=disable
+      TEST_NATS_URL: nats://localhost:4222
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.11"
+      - name: Start PostgreSQL and NATS JetStream
+        run: docker compose up -d --wait postgres nats
+      - name: Integration tests
+        run: go test -race -count=1 -tags=integration ./...
+
+  web:
+    name: Web lint, type check, build and npm audit
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.21.1
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm audit --audit-level=high
+
+  e2e:
+    name: Compose demo + Playwright E2E
+    runs-on: ubuntu-24.04
+    needs: [go, web]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.21.1
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Start the full stack
+        run: docker compose up -d --build --wait
+      - name: Scripted demo (make demo)
+        run: make demo
+      - name: Install Playwright
+        working-directory: apps/web
+        run: npm ci && npx playwright install --with-deps chromium
+      - name: Playwright E2E
+        working-directory: apps/web
+        run: npx playwright test
+      - name: Compose logs
+        if: failure()
+        run: docker compose logs --no-color > compose.log; tail -n 200 compose.log
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: e2e-artifacts
+          path: |
+            apps/web/playwright-report
+            apps/web/test-results
+            compose.log
+          retention-days: 7

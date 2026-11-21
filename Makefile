@@ -1,42 +1,51 @@
-.PHONY: all build dev test lint clean docker-up docker-down seed
+GO ?= go
+WEB := apps/web
+COMPOSE ?= docker compose
+export TEST_DATABASE_URL ?= postgres://shippulse:shippulse@localhost:5432/shippulse?sslmode=disable
+export TEST_NATS_URL ?= nats://localhost:4222
 
-all: build
+.PHONY: build test test-integration lint vuln deps-up up down demo demo-reset web-install web-check e2e ci
 
-build:
-	@echo "==> Building all Go services..."
-	cd services/control-plane && go build -o ../../bin/control-plane ./cmd/server
-	cd services/ingest && go build -o ../../bin/ingest ./cmd/ingest
-	cd services/worker && go build -o ../../bin/worker ./cmd/worker
-	cd services/realtime && go build -o ../../bin/realtime ./cmd/realtime
-	cd agent/shippulse-agent && go build -o ../../bin/shippulse-agent ./cmd/agent
-	@echo "==> Build complete."
+build: ## Build the shippulse binary into bin/
+	$(GO) build -o bin/shippulse ./cmd/shippulse
 
-dev:
-	docker compose up -d postgres redis nats clickhouse otel-collector
-	@echo "==> Infrastructure started. Running control-plane in background..."
+test: ## Go unit tests (no external services)
+	$(GO) test -race ./...
 
-docker-up:
-	docker compose up -d --build
+deps-up: ## Start only PostgreSQL and NATS (for integration tests)
+	$(COMPOSE) up -d --wait postgres nats
 
-docker-down:
-	docker compose down -v
+test-integration: ## Go integration tests against real PostgreSQL and NATS
+	$(GO) test -race -count=1 -tags=integration ./...
 
-test:
-	@echo "==> Running Go unit and integration tests..."
-	cd packages/contracts && go test -v ./...
-	cd services/control-plane && go test -v ./...
-	cd services/ingest && go test -v ./...
-	cd services/worker && go test -v ./...
-	cd agent/shippulse-agent && go test -v ./...
+lint: ## gofmt + go vet + web lint/type check
+	@test -z "$$(gofmt -l cmd internal)" || (gofmt -l cmd internal; exit 1)
+	$(GO) vet ./...
+	$(GO) vet -tags=integration ./...
 
-lint:
-	@echo "==> Running Go vet..."
-	cd services/control-plane && go vet ./...
-	cd agent/shippulse-agent && go vet ./...
+vuln: ## govulncheck + npm audit (high/critical)
+	$(GO) run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+	cd $(WEB) && npm audit --audit-level=high
 
-seed:
-	@echo "==> Seeding database with demo data..."
-	cd services/control-plane && go run ./cmd/seed
+up: ## Build and start the full stack (API :8080, console :3000)
+	$(COMPOSE) up -d --build --wait
 
-clean:
-	rm -rf bin/
+down:
+	$(COMPOSE) down
+
+demo: up ## Scripted demo: two healthy deploys and one failed deploy that is rolled back
+	$(COMPOSE) exec -T -e SHIPPULSE_API_URL=http://localhost:8080 api /shippulse demo
+
+demo-reset: ## Drop all demo data (volumes) and stop the stack
+	$(COMPOSE) down -v
+
+web-install:
+	cd $(WEB) && npm ci
+
+web-check: ## Lint, type-check and build the console
+	cd $(WEB) && npm run lint && npm run typecheck && npm run build
+
+e2e: up ## Playwright E2E against the running compose stack
+	cd $(WEB) && npx playwright test
+
+ci: lint test test-integration web-check

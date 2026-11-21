@@ -37,7 +37,10 @@ that an operator can see the evidence afterwards.
   A request may carry `"canary": [10, 50]` — strictly increasing weights, 1-99 — and the
   worker inserts one `canary_<pct>` step per weight before `promote`, calling the provider's
   `SetTraffic` and re-probing health between shifts; a failed canary step rolls back like
-  any other. The simulated runtime
+  any other. With `CANARY_METRICS_URL` + `CANARY_METRICS_QUERY` + `CANARY_METRICS_THRESHOLD`
+  set, each weight is also gated on a real error signal: the worker evaluates a Prometheus
+  instant query (any compatible API — Prometheus, VictoriaMetrics, Mimir) and rolls back
+  when the scalar result exceeds the threshold or the query fails (fail-closed). The simulated runtime
   supports the failure profiles `healthy`, `unhealthy`, `timeout` and `provider_unavailable`.
 - **Real provider (opt-in)**: `PROVIDER=kubectl` swaps the simulated runtime for a real
   Kubernetes backend driven by the `kubectl` CLI. It maps each target to a Deployment
@@ -173,8 +176,7 @@ pull request and push to `main`, together with `make demo`.
 
 ## Roadmap
 
-- Real metrics providers (error rate, latency) as canary rollback signals instead of health probes alone.
-- OpenTelemetry traces across API → outbox → worker using the existing correlation id.
+- Histogram canary analysis (e.g. Prometheus `histogram_quantile` latency checks) alongside the scalar threshold probe.
 
 ## License
 

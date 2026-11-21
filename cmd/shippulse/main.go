@@ -25,6 +25,7 @@ import (
 	"github.com/tatitoxt/shippulse/internal/config"
 	"github.com/tatitoxt/shippulse/internal/demo"
 	"github.com/tatitoxt/shippulse/internal/ghstatus"
+	"github.com/tatitoxt/shippulse/internal/metrics"
 	"github.com/tatitoxt/shippulse/internal/migrate"
 	"github.com/tatitoxt/shippulse/internal/outbox"
 	"github.com/tatitoxt/shippulse/internal/provider"
@@ -164,6 +165,7 @@ func runWorker(ctx context.Context, log *slog.Logger) error {
 	cfg.Probe.Timeout = config.Duration("HEALTH_PROBE_TIMEOUT", cfg.Probe.Timeout)
 	cfg.Probe.Interval = config.Duration("HEALTH_PROBE_INTERVAL", cfg.Probe.Interval)
 	exec := &worker.Executor{Store: s, Provider: provider.FromEnv(config.RuntimeURL()), Cfg: cfg,
+		CanaryProbe: metrics.FromEnv(os.Getenv),
 		Log: log, Statuses: statusReporter(log)}
 
 	relay := &outbox.Relay{Store: s, Publish: b.Publish, Interval: 250 * time.Millisecond, Batch: 50,

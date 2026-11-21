@@ -13,6 +13,7 @@ import (
 	"github.com/tatitoxt/shippulse/internal/bus"
 	"github.com/tatitoxt/shippulse/internal/domain"
 	"github.com/tatitoxt/shippulse/internal/ghstatus"
+	"github.com/tatitoxt/shippulse/internal/metrics"
 	"github.com/tatitoxt/shippulse/internal/provider"
 	"github.com/tatitoxt/shippulse/internal/store"
 	"github.com/tatitoxt/shippulse/internal/telemetry"
@@ -41,8 +42,11 @@ func DefaultConfig(id string) Config {
 type Executor struct {
 	Store    *store.Store
 	Provider provider.Provider
-	Cfg      Config
-	Log      *slog.Logger
+	// CanaryProbe, when set, evaluates the real error signal after each traffic
+	// shift — an unhealthy reading rolls the deployment back like a failed step.
+	CanaryProbe metrics.Probe
+	Cfg         Config
+	Log         *slog.Logger
 	Statuses *ghstatus.Reporter // best-effort GitHub commit statuses; nil/disabled = no-op
 }
 
@@ -212,6 +216,15 @@ func (e *Executor) runSteps(ctx context.Context, d store.Deployment, done map[st
 				}
 				return fail(store.Failure{Step: st.Name, Code: code, Rollback: true,
 					Message: fmt.Sprintf("%s at %d%% traffic after %d probe(s)", code, w, tries)})
+			}
+			if e.CanaryProbe != nil {
+				if err := e.CanaryProbe.Healthy(sctx); err != nil {
+					if sctx.Err() != nil {
+						return sctx.Err()
+					}
+					return fail(store.Failure{Step: st.Name, Code: domain.CodeHealthCheckFailed,
+						Rollback: true, Message: fmt.Sprintf("canary metrics unhealthy at %d%% traffic: %v", w, err)})
+				}
 			}
 			return e.Store.CompleteStep(sctx, d, owner, st.Name,
 				fmt.Sprintf("%d%% traffic healthy after %d probe(s)", w, tries))

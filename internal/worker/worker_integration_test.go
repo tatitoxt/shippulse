@@ -446,3 +446,30 @@ func TestWorkerContinuesTheDeploymentTrace(t *testing.T) {
 		}
 	}
 }
+
+type fakeProbe struct{ err error }
+
+func (f fakeProbe) Healthy(ctx context.Context) error { return f.err }
+
+// An over-threshold error signal at a canary weight rolls the deployment back.
+func TestCanaryRollsBackOnUnhealthyMetrics(t *testing.T) {
+	h := start(t)
+	h.wait(t, h.deploy(t, "v1.0.0", domain.ProfileHealthy).ID)
+	h.exec.CanaryProbe = fakeProbe{err: errors.New("error rate 0.09 over threshold 0.05")}
+
+	d, _, err := h.s.CreateDeployment(context.Background(), store.CreateDeploymentInput{
+		OrganizationID: h.tg.Org, ServiceID: h.tg.Service, EnvironmentID: h.tg.Env, Version: "v2.0.0",
+		FailureProfile: string(domain.ProfileHealthy), IdempotencyKey: uuid.NewString(), Source: "manual",
+		Actor: "operator@acme.example", Canary: []int{10}, CorrelationID: uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d = h.wait(t, d.ID)
+	if d.Status != "failed" {
+		t.Fatalf("status=%s, want failed (metrics probe rejected the weight)", d.Status)
+	}
+	if d.ErrorMessage == nil || !strings.Contains(*d.ErrorMessage, "canary metrics unhealthy") {
+		t.Fatalf("error=%v", d.ErrorMessage)
+	}
+}

@@ -139,7 +139,7 @@ func runAPI(ctx context.Context, log *slog.Logger) error {
 	defer s.Pool.Close()
 	srv := &api.Server{
 		Store: s, Auth: issuer, Log: log,
-		Runtime:       provider.NewHTTP(config.RuntimeURL()),
+		Runtime:       provider.FromEnv(config.RuntimeURL()),
 		WebhookSecret: os.Getenv("GITHUB_WEBHOOK_SECRET"),
 		Statuses:      statusReporter(log),
 	}
@@ -163,7 +163,7 @@ func runWorker(ctx context.Context, log *slog.Logger) error {
 	cfg.Probe.Attempts = config.Int("HEALTH_PROBE_ATTEMPTS", cfg.Probe.Attempts)
 	cfg.Probe.Timeout = config.Duration("HEALTH_PROBE_TIMEOUT", cfg.Probe.Timeout)
 	cfg.Probe.Interval = config.Duration("HEALTH_PROBE_INTERVAL", cfg.Probe.Interval)
-	exec := &worker.Executor{Store: s, Provider: provider.NewHTTP(config.RuntimeURL()), Cfg: cfg,
+	exec := &worker.Executor{Store: s, Provider: provider.FromEnv(config.RuntimeURL()), Cfg: cfg,
 		Log: log, Statuses: statusReporter(log)}
 
 	relay := &outbox.Relay{Store: s, Publish: b.Publish, Interval: 250 * time.Millisecond, Batch: 50,

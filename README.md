@@ -39,6 +39,12 @@ that an operator can see the evidence afterwards.
   `SetTraffic` and re-probing health between shifts; a failed canary step rolls back like
   any other. The simulated runtime
   supports the failure profiles `healthy`, `unhealthy`, `timeout` and `provider_unavailable`.
+- **Real provider (opt-in)**: `PROVIDER=kubectl` swaps the simulated runtime for a real
+  Kubernetes backend driven by the `kubectl` CLI. It maps each target to a Deployment
+  named `<service>-<environment>` in `KUBECTL_NAMESPACE` (default `default`), applies via
+  `kubectl set image`, probes by ready replicas, and — with `CANARY_INGRESS=true` —
+  drives canary weights through the NGINX Ingress `canary-weight` annotation on an
+  Ingress named like the Deployment.
 - **Automatic rollback**: a failed health probe marks the deployment `failed` and queues a
   separate rollback operation that re-applies and re-probes the previous stable version.
   Rollbacks that fail are reported as failed (never as "rolled back") and can be retried manually.
@@ -168,7 +174,6 @@ pull request and push to `main`, together with `make demo`.
 ## Roadmap
 
 - Real metrics providers (error rate, latency) as canary rollback signals instead of health probes alone.
-- A real provider (for example a Kubernetes Deployment) behind the existing `Provider` interface, opt-in via configuration.
 - OpenTelemetry traces across API → outbox → worker using the existing correlation id.
 
 ## License

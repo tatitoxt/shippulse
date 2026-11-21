@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 type changeNotification struct {
 	Org    string          `json:"org"`
 	Change json.RawMessage `json:"change"`
+	Seq    int64           `json:"seq"`
 }
 
 // notifier fans database change notifications out to SSE subscribers over a
@@ -27,7 +29,7 @@ type changeNotification struct {
 // in-process. A client that vanishes costs only a goroutine until the handler
 // notices, never a database connection.
 type notifier struct {
-	pool *pgxpool.Pool // config source only
+	pool *pgxpool.Pool // also used for replay + prune queries
 	log  *slog.Logger
 
 	mu   sync.Mutex
@@ -55,13 +57,15 @@ func (n *notifier) unsubscribe(ch chan changeNotification) {
 }
 
 // run keeps the LISTEN connection alive for the process lifetime, reconnecting
-// after drops. WaitForNotification fails on conn loss; stale events are not
-// replayed (clients refresh anyway).
+// after drops; reconnecting clients replay missed changes via Last-Event-ID.
 func (n *notifier) run() {
+	ctx := context.Background()
 	for {
-		if err := n.listen(context.Background()); err != nil {
+		listenCtx, stop := context.WithCancel(ctx)
+		if err := n.listen(listenCtx); err != nil {
 			n.log.Warn("change listener ended; reconnecting", "err", err)
 		}
+		stop()
 		time.Sleep(2 * time.Second)
 	}
 }
@@ -76,6 +80,7 @@ func (n *notifier) listen(ctx context.Context) error {
 		return err
 	}
 	n.log.Info("listening for change notifications")
+	go n.prune(ctx)
 	for {
 		msg, err := conn.WaitForNotification(ctx)
 		if err != nil {
@@ -103,10 +108,55 @@ func (n *notifier) broadcast(cn changeNotification) {
 	}
 }
 
+// prune drops change_events older than an hour so the replay log stays
+// bounded; SSE clients older than that fall back to the 30 s poll.
+func (n *notifier) prune(ctx context.Context) {
+	t := time.NewTicker(10 * time.Minute)
+	defer t.Stop()
+	for {
+		if _, err := n.pool.Exec(ctx,
+			`DELETE FROM change_events WHERE created_at < now() - interval '1 hour'`); err != nil {
+			n.log.Warn("change_events prune failed", "err", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+// replayEvents re-sends persisted change rows newer than seq for one org,
+// returning the largest id written so live delivery can skip duplicates.
+func (n *notifier) replayEvents(ctx context.Context, org string, after int64, send func(seq int64, change json.RawMessage) error) (int64, error) {
+	rows, err := n.pool.Query(ctx,
+		`SELECT id, change FROM change_events WHERE organization_id = $1 AND id > $2 ORDER BY id`,
+		org, after)
+	if err != nil {
+		return after, err
+	}
+	defer rows.Close()
+	last := after
+	for rows.Next() {
+		var id int64
+		var change json.RawMessage
+		if err := rows.Scan(&id, &change); err != nil {
+			return last, err
+		}
+		if err := send(id, change); err != nil {
+			return last, err
+		}
+		last = id
+	}
+	return last, rows.Err()
+}
+
 // streamEvents serves GET /api/v1/events as an org-scoped Server-Sent Events
 // stream. Deployment, step and promoted-version changes arrive via Postgres
 // LISTEN/NOTIFY, so the stream works across API/worker process boundaries.
 // Clients re-fetch the affected resource; events carry only ids and statuses.
+// Reconnecting clients pass Last-Event-ID and missed changes are replayed
+// from the persisted change_events log before live delivery resumes.
 func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -127,6 +177,23 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 
 	org := principal(r).OrganizationID
+	lastID, _ := strconv.ParseInt(r.Header.Get("Last-Event-ID"), 10, 64)
+	hadLastID := r.Header.Get("Last-Event-ID") != ""
+	send := func(seq int64, change json.RawMessage) error {
+		if _, err := fmt.Fprintf(w, "id: %d\ndata: %s\n\n", seq, change); err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	}
+	// Replay anything missed while disconnected before live delivery resumes
+	// (only when the client passes Last-Event-ID — a fresh connect gets none).
+	var err error
+	if hadLastID {
+		if lastID, err = n.replayEvents(r.Context(), org, lastID, send); err != nil {
+			return
+		}
+	}
 	heartbeat := time.NewTicker(25 * time.Second)
 	defer heartbeat.Stop()
 	for {
@@ -134,13 +201,13 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case note := <-ch:
-			if note.Org != org {
+			if note.Org != org || (note.Seq != 0 && note.Seq <= lastID) {
 				continue
 			}
-			if _, err := fmt.Fprintf(w, "data: %s\n\n", note.Change); err != nil {
+			if err := send(note.Seq, note.Change); err != nil {
 				return
 			}
-			flusher.Flush()
+			lastID = note.Seq
 		case <-heartbeat.C:
 			// Comment line so proxies and browsers do not consider the stream
 			// stalled; also flushes dead connections.

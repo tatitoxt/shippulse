@@ -67,6 +67,9 @@ that an operator can see the evidence afterwards.
   `service_environments`. A single dedicated `LISTEN` connection fans out to all subscribers
   in-process, so any number of open consoles costs exactly one database connection. The console
   refreshes instantly on each event and keeps a 30 s poll as a backstop.
+  Events are persisted to `change_events` (retained for one hour) and every
+  `data:` frame carries an `id:` — a reconnecting client that sends
+  `Last-Event-ID` replays everything it missed before live delivery resumes.
 - **GitHub commit statuses**: when `GITHUB_TOKEN` is set, the worker posts `pending` →
   `success`/`failure` statuses (context `shippulse/<environment>`) back to the deployment's
   `git_sha`, and the API posts `error` when a queued deploy is cancelled. Reporting is
@@ -178,8 +181,9 @@ pull request and push to `main`, together with `make demo`.
   commit statuses (`GITHUB_TOKEN`); ShipPulse does not create GitHub Deployments itself.
 - Authentication is email/password with HS256 JWTs for seeded demo users. There is no sign-up,
   password reset, SSO, token revocation or rate limiting.
-- The SSE stream has no replay: an event missed between disconnect and reconnect is only caught
-  by the 30 s poll backstop, and there is no fallback for clients that block `EventSource`.
+- SSE replay covers only the last hour (`change_events` retention); an event missed for longer
+  is only caught by the 30 s poll backstop, and there is no fallback for clients that block
+  `EventSource`.
 - No metrics/tracing pipeline: logs are structured JSON with correlation ids only.
 - Not security-audited and not deployed anywhere; the Compose file is for local demos.
 

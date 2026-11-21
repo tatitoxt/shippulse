@@ -198,3 +198,95 @@ func TestEventStreamRequiresAuth(t *testing.T) {
 		t.Fatalf("expected 401, got %d", resp.StatusCode)
 	}
 }
+
+// openStreamID is openStream but keeps `id:` lines so Last-Event-ID replay can
+// be asserted.
+func openStreamID(t *testing.T, base, token, lastID string) chan [2]string {
+	t.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), "GET", base+"/api/v1/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	if lastID != "" {
+		req.Header.Set("Last-Event-ID", lastID)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	t.Cleanup(func() { resp.Body.Close() })
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stream status %d", resp.StatusCode)
+	}
+	lines := make(chan [2]string, 32)
+	go func() {
+		scanner := bufio.NewScanner(resp.Body)
+		var id string
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.HasPrefix(line, "id:") {
+				id = strings.TrimSpace(strings.TrimPrefix(line, "id:"))
+			}
+			if strings.HasPrefix(line, "data:") {
+				lines <- [2]string{id, strings.TrimSpace(strings.TrimPrefix(line, "data:"))}
+			}
+		}
+	}()
+	return lines
+}
+
+func TestEventStreamReplaysMissedChanges(t *testing.T) {
+	base, s := newEventServer(t)
+	acme := testutil.Lookup(t, s, "acme-demo", "checkout-api", "staging")
+	c := login(t, base, "operator@acme.example")
+
+	// First connection: consume events until we learn a seq id.
+	stream1 := openStreamID(t, base, c.token, "")
+	id1 := createDeployment(t, c, acme, "9.9.9")
+	var lastID string
+	deadline := time.After(10 * time.Second)
+	for lastID == "" {
+		select {
+		case ev := <-stream1:
+			var m map[string]any
+			if err := json.Unmarshal([]byte(ev[1]), &m); err != nil {
+				t.Fatalf("bad event %q: %v", ev[1], err)
+			}
+			if m["entity"] == "deployment" && m["id"] == id1 && ev[0] != "" {
+				lastID = ev[0]
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for first event id")
+		}
+	}
+
+	// Changes made while "disconnected" must be replayed on reconnect.
+	id2 := createDeployment(t, c, acme, "9.9.10")
+	setDeploymentStatus(t, s, id2, "running")
+
+	stream2 := openStreamID(t, base, c.token, lastID)
+	deadline = time.After(10 * time.Second)
+	replayed := map[string]string{}
+	for {
+		select {
+		case ev := <-stream2:
+			var m map[string]any
+			if err := json.Unmarshal([]byte(ev[1]), &m); err != nil {
+				t.Fatalf("bad event %q: %v", ev[1], err)
+			}
+			if m["entity"] == "deployment" {
+				replayed[m["id"].(string)] = ev[0]
+				if id, ok := m["id"].(string); ok && id == id2 && m["status"] == "running" {
+					// replayed both the missed create and the status update
+					if _, ok := replayed[id1]; ok {
+						t.Fatalf("event older than Last-Event-ID was replayed: %v", m)
+					}
+					return
+				}
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for replay of %s; got %v", id2, replayed)
+		}
+	}
+}

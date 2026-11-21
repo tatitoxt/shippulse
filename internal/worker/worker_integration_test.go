@@ -40,7 +40,7 @@ func cfg(id string) worker.Config {
 }
 
 // start wires the real pipeline: PostgreSQL outbox -> relay -> JetStream -> worker.
-func start(t *testing.T) *harness {
+func start(t testing.TB) *harness {
 	t.Helper()
 	s := testutil.DB(t, "worker")
 	ctx, cancel := context.WithCancel(context.Background())

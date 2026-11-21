@@ -174,3 +174,7 @@ pull request and push to `main`, together with `make demo`.
 ## License
 
 [MIT](LICENSE) © Fausto Pastura
+
+## Benchmarks
+
+`go test -tags integration -bench DeploymentEndToEnd` drives the full pipeline (Postgres outbox -> relay -> JetStream -> worker -> promoted): **22.5 ms** create-to-promote, ~44 deployments/sec sequential. See [docs/benchmarks.md](docs/benchmarks.md).

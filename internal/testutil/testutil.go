@@ -19,7 +19,7 @@ import (
 
 const Password = "integration-password"
 
-func env(t *testing.T, key string) string {
+func env(t testing.TB, key string) string {
 	t.Helper()
 	v := os.Getenv(key)
 	if v == "" {
@@ -28,11 +28,11 @@ func env(t *testing.T, key string) string {
 	return v
 }
 
-func NATSURL(t *testing.T) string { return env(t, "TEST_NATS_URL") }
+func NATSURL(t testing.TB) string { return env(t, "TEST_NATS_URL") }
 
 // DB returns a store backed by a dedicated database (one per test package,
 // so packages can run in parallel), reset to a migrated and seeded state.
-func DB(t *testing.T, name string) *store.Store {
+func DB(t testing.TB, name string) *store.Store {
 	t.Helper()
 	ctx := context.Background()
 	base := env(t, "TEST_DATABASE_URL")
@@ -72,7 +72,7 @@ func DB(t *testing.T, name string) *store.Store {
 // Target identifies a seeded service environment.
 type Target struct{ Org, Service, Env string }
 
-func Lookup(t *testing.T, s *store.Store, orgSlug, serviceSlug, envSlug string) Target {
+func Lookup(t testing.TB, s *store.Store, orgSlug, serviceSlug, envSlug string) Target {
 	t.Helper()
 	var tg Target
 	err := s.Pool.QueryRow(context.Background(), `

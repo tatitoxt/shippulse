@@ -6,7 +6,7 @@ import { Suspense } from "react";
 import { ErrorBox, StatusBadge, Time } from "@/components/ui";
 import { api } from "@/lib/api";
 import type { Deployment } from "@/lib/types";
-import { usePoll } from "@/lib/usePoll";
+import { useLive } from "@/lib/useLive";
 
 export default function DeploymentsPage() {
   return (
@@ -19,9 +19,8 @@ export default function DeploymentsPage() {
 function DeploymentList() {
   const serviceId = useSearchParams().get("service_id") ?? "";
   const query = serviceId ? `?service_id=${encodeURIComponent(serviceId)}` : "";
-  const { data, error } = usePoll(
-    () => api<{ deployments: Deployment[] }>(`/deployments${query}`).then((r) => r.deployments),
-    2000,
+  const { data, error } = useLive(() =>
+    api<{ deployments: Deployment[] }>(`/deployments${query}`).then((r) => r.deployments),
   );
   return (
     <section className="space-y-4">

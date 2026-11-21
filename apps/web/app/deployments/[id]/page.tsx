@@ -7,7 +7,7 @@ import { usePrincipal } from "@/components/Shell";
 import { ErrorBox, StatusBadge, Time } from "@/components/ui";
 import { api, ApiError, newIdempotencyKey } from "@/lib/api";
 import { TERMINAL, type AuditEvent, type Deployment, type RuntimeStatus } from "@/lib/types";
-import { usePoll } from "@/lib/usePoll";
+import { useLive } from "@/lib/useLive";
 
 interface Evidence {
   deployment: Deployment;
@@ -33,7 +33,7 @@ const settled = (e: Evidence | null) =>
 
 export default function DeploymentDetail() {
   const { id } = useParams<{ id: string }>();
-  const { data, error, refresh } = usePoll(() => loadEvidence(id), 1000, (d) => !settled(d));
+  const { data, error, refresh } = useLive(() => loadEvidence(id), (d) => !settled(d));
 
   if (error instanceof ApiError && error.status === 404) {
     return (

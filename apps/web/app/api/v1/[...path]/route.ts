@@ -8,11 +8,21 @@ const FORWARDED = ["authorization", "content-type", "idempotency-key", "x-correl
 
 async function proxy(req: NextRequest): Promise<Response> {
   const base = process.env.CONTROL_PLANE_URL ?? "http://localhost:8080";
-  const target = `${base}${req.nextUrl.pathname}${req.nextUrl.search}`;
+  // EventSource cannot set headers, so the SSE endpoint accepts the JWT as a
+  // `token` query param; the proxy translates it back into Authorization and
+  // never forwards it in the URL.
+  const search = new URLSearchParams(req.nextUrl.search);
+  const queryToken = search.get("token");
+  search.delete("token");
+  const qs = search.toString();
+  const target = `${base}${req.nextUrl.pathname}${qs ? `?${qs}` : ""}`;
   const headers = new Headers();
   for (const h of FORWARDED) {
     const v = req.headers.get(h);
     if (v) headers.set(h, v);
+  }
+  if (queryToken && !headers.has("authorization")) {
+    headers.set("authorization", `Bearer ${queryToken}`);
   }
   const hasBody = req.method !== "GET" && req.method !== "HEAD";
   try {

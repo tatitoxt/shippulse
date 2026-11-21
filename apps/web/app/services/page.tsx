@@ -7,7 +7,7 @@ import { usePrincipal } from "@/components/Shell";
 import { ErrorBox } from "@/components/ui";
 import { api, newIdempotencyKey } from "@/lib/api";
 import { FAILURE_PROFILES, type Deployment, type RuntimeStatus, type Service } from "@/lib/types";
-import { usePoll } from "@/lib/usePoll";
+import { useLive } from "@/lib/useLive";
 
 type ServiceWithRuntime = Service & { runtimes: RuntimeStatus[] };
 
@@ -22,7 +22,7 @@ async function loadServices(): Promise<ServiceWithRuntime[]> {
 }
 
 export default function ServicesPage() {
-  const { data, error } = usePoll(loadServices, 3000);
+  const { data, error } = useLive(loadServices);
   if (error) return <ErrorBox error={error.message} />;
   if (!data) return <p className="text-sm text-slate-400">Loading services…</p>;
   return (

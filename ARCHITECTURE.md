@@ -58,6 +58,7 @@ sequenceDiagram
 | A failed rollback is not reported as success | rollback status is independent of deployment status | `TestFailedRollbackIsNotReportedAsRolledBack` |
 | Tenants are isolated | every query filtered by `organization_id`; composite foreign keys; simulated runtimes keyed by organization id | `TestTenantIsolation`, `TestTenantsCannotSeeEachOther`, `TestRuntimesAreIsolatedPerTenant`, E2E |
 | Audit cannot be rewritten | trigger rejects `UPDATE`/`DELETE` on `audit_events` | `TestAuditEventsAreAppendOnly` |
+| Live updates stay tenant-scoped | `pg_notify` payload carries `organization_id`; the SSE handler drops every notification for other orgs before writing | `TestEventStreamDoesNotLeakAcrossOrgs`, `TestEventStreamPushesDeploymentChanges` |
 
 See [docs/spec/release-lifecycle.md](docs/spec/release-lifecycle.md) for states and API, and
 [docs/adr](docs/adr) for the outbox, idempotency and scope decisions.

@@ -4,12 +4,11 @@ import Link from "next/link";
 import { ErrorBox, Time } from "@/components/ui";
 import { api } from "@/lib/api";
 import type { AuditEvent } from "@/lib/types";
-import { usePoll } from "@/lib/usePoll";
+import { useLive } from "@/lib/useLive";
 
 export default function AuditPage() {
-  const { data, error } = usePoll(
-    () => api<{ audit_events: AuditEvent[] }>("/audit-events?limit=200").then((r) => r.audit_events),
-    3000,
+  const { data, error } = useLive(() =>
+    api<{ audit_events: AuditEvent[] }>("/audit-events?limit=200").then((r) => r.audit_events),
   );
   return (
     <section className="space-y-4">

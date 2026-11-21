@@ -54,6 +54,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/deployments", s.listDeployments)
 			r.Get("/deployments/{id}", s.getDeployment)
 			r.Get("/audit-events", s.listAudit)
+			r.Get("/events", s.streamEvents)
 			r.Group(func(r chi.Router) {
 				r.Use(requireRole(domain.RoleEngineer))
 				r.Post("/deployments", s.createDeployment)

@@ -40,6 +40,10 @@ that an operator can see the evidence afterwards.
   Rollbacks that fail are reported as failed (never as "rolled back") and can be retried manually.
 - **Audit log**: append-only table (updates/deletes are rejected by a trigger); sensitive
   metadata keys are redacted.
+- **Live updates over SSE**: `GET /api/v1/events` streams org-scoped change events emitted by
+  Postgres `LISTEN/NOTIFY` triggers on `deployments`, `deployment_steps` and
+  `service_environments`. The console refreshes instantly on each event and keeps a 30 s poll
+  as a backstop, so it works across API/worker process boundaries without a broker.
 - **Web console** (Next.js): services with promoted vs. actually-running version, deploy form,
   deployment list, per-deployment steps, rollback and runtime evidence, audit trail.
 - **Multi-tenant**: two synthetic organizations (`Acme Demo`, `Globex Demo`); every query is
@@ -131,8 +135,9 @@ One Go module, one binary with subcommands (`migrate`, `seed`, `api`, `worker`, 
 | Audits | `make vuln` | govulncheck and `npm audit --audit-level=high` |
 
 Measured in this repository (count them with `go test -list . ./...` and
-`go test -tags=integration -list . ./...`): 52 Go test functions — 22 unit and 30 integration —
-plus 3 Playwright E2E tests. All of them run in [GitHub Actions](.github/workflows/ci.yml) on every
+`go test -tags=integration -list . ./...`): 55 Go test functions — 22 unit and 33 integration —
+plus 3 Playwright E2E tests. The SSE endpoint is covered by live integration tests that drive a
+deployment through real `pg_notify` triggers and assert org isolation on the stream. All of them run in [GitHub Actions](.github/workflows/ci.yml) on every
 pull request and push to `main`, together with `make demo`.
 
 ## Limitations
@@ -145,7 +150,9 @@ pull request and push to `main`, together with `make demo`.
   the GitHub API back (no deployment statuses).
 - Authentication is email/password with HS256 JWTs for seeded demo users. There is no sign-up,
   password reset, SSO, token revocation or rate limiting.
-- The console polls the API every 1–3 s instead of streaming updates.
+- The SSE stream is push-only within one API process view of Postgres notifications; there is
+  no event replay after reconnect beyond the client's refresh, and no SSE fallback for clients
+  that block `EventSource`.
 - No metrics/tracing pipeline: logs are structured JSON with correlation ids only.
 - Not security-audited and not deployed anywhere; the Compose file is for local demos.
 
@@ -154,7 +161,6 @@ pull request and push to `main`, together with `make demo`.
 - Report deployment statuses back to GitHub.
 - Canary/progressive steps with real metrics as rollback signals.
 - A real provider (for example a Kubernetes Deployment) behind the existing `Provider` interface, opt-in via configuration.
-- Server-sent events for live lifecycle updates in the console.
 - OpenTelemetry traces across API → outbox → worker using the existing correlation id.
 
 ## License

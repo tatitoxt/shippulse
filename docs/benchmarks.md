@@ -1,6 +1,6 @@
 # Benchmarks
 
-All numbers below were measured on 2026-11-22 in a Devin VM (8 vCPU Intel Xeon, 31 GiB RAM)
+All numbers below were measured on 2026-11-22 in a cloud Linux VM (8 vCPU Intel Xeon, 31 GiB RAM)
 against the Docker Compose `postgres:16.10-alpine` and `nats:2.11.9-alpine` containers. Both
 benchmarks run the real pipeline (`CreateDeployment` → PostgreSQL transactional outbox → relay →
 JetStream → worker → promoted) with the in-memory provider and the `healthy` profile, so they

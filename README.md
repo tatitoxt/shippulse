@@ -192,7 +192,7 @@ pull request and push to `main`, together with `make demo`.
 
 ## Benchmarks
 
-Measured in a Devin VM (8 vCPU Intel Xeon, 31 GiB RAM) against the Compose PostgreSQL 16.10 and
+Measured in a cloud Linux VM (8 vCPU Intel Xeon, 31 GiB RAM) against the Compose PostgreSQL 16.10 and
 NATS 2.11.9 containers, with the in-memory provider and the healthy profile, so this is the
 control-plane overhead only. Details and reproduction commands: [docs/benchmarks.md](docs/benchmarks.md).
 

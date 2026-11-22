@@ -182,8 +182,9 @@ pull request and push to `main`, together with `make demo`.
 
 - The runtime is simulated in memory: its state resets when the `simruntime` container restarts,
   and "health" is decided by the failure profile chosen at deploy time.
-- Single worker process in the demo; multiple workers are supported by leases and are covered by
-  integration tests, not by a load test. Measured numbers: docs/benchmarks.md (~22.5ms create→promote, ~44 deployments/sec).
+- Single worker process in the demo; multiple workers are supported by leases and verified by a
+  multi-worker load test (docs/benchmarks.md: ~22.5ms create→promote sequential, ~21.6 deployments/sec
+  aggregate with 8 workers, zero duplicate step executions).
 - GitHub integration is limited to receiving signed `deployment` events plus opt-in
   commit statuses (`GITHUB_TOKEN`); ShipPulse does not create GitHub Deployments itself.
 - Authentication is email/password with HS256 JWTs for seeded demo users, with a
@@ -194,7 +195,9 @@ pull request and push to `main`, together with `make demo`.
   `EventSource`.
 - `GET /metrics` serves Prometheus exposition (deployments/steps/rollbacks by status,
   duration p50/p95, outbox backlog, per-process HTTP counters). It is unauthenticated,
-  like `/healthz` — bind the api to a private interface in real deployments. No tracing.
+  like `/healthz` — bind the api to a private interface in real deployments. End-to-end
+  OpenTelemetry traces (API → outbox → worker, W3C traceparent across the bus) activate
+  with `OTEL_EXPORTER_OTLP_ENDPOINT` and are no-ops otherwise.
 - Not security-audited and not deployed anywhere; the Compose file is for local demos.
 
 ## License

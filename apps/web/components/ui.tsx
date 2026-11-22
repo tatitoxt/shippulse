@@ -1,5 +1,6 @@
 const STATUS_STYLES: Record<string, string> = {
   queued: "bg-slate-700/40 text-slate-300 border-slate-600",
+  awaiting_approval: "bg-amber-500/10 text-amber-300 border-amber-500/40",
   running: "bg-sky-500/10 text-sky-300 border-sky-500/40",
   succeeded: "bg-emerald-500/10 text-emerald-300 border-emerald-500/40",
   failed: "bg-rose-500/10 text-rose-300 border-rose-500/40",

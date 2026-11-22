@@ -170,6 +170,16 @@ function Actions({ deployment: d, onDone }: { deployment: Deployment; onDone: ()
 
   return (
     <div className="flex items-center gap-2">
+      {d.status === "awaiting_approval" && (
+        <>
+          <button className="btn" disabled={busy} onClick={() => run(`/deployments/${d.id}/approve`)}>
+            Approve
+          </button>
+          <button className="btn-secondary" disabled={busy} onClick={() => run(`/deployments/${d.id}/cancel`)}>
+            Cancel
+          </button>
+        </>
+      )}
       {d.status === "queued" && (
         <button className="btn-secondary" disabled={busy} onClick={() => run(`/deployments/${d.id}/cancel`)}>
           Cancel

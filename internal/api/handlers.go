@@ -188,11 +188,12 @@ func (s *Server) getDeployment(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createDeployment(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		ServiceID      string `json:"service_id"`
-		EnvironmentID  string `json:"environment_id"`
-		Version        string `json:"version"`
-		FailureProfile string `json:"failure_profile"`
-		Canary         []int  `json:"canary"`
+		ServiceID        string `json:"service_id"`
+		EnvironmentID    string `json:"environment_id"`
+		Version          string `json:"version"`
+		FailureProfile   string `json:"failure_profile"`
+		Canary           []int  `json:"canary"`
+		RequiresApproval bool   `json:"requires_approval"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -227,7 +228,8 @@ func (s *Server) createDeployment(w http.ResponseWriter, r *http.Request) {
 	d, created, err := s.Store.CreateDeployment(ctx, store.CreateDeploymentInput{
 		OrganizationID: p.OrganizationID, ServiceID: body.ServiceID, EnvironmentID: body.EnvironmentID,
 		Version: body.Version, FailureProfile: string(profile), IdempotencyKey: key,
-		Source: "manual", Actor: p.Email, Canary: body.Canary, CorrelationID: correlationID(r),
+		Source: "manual", Actor: p.Email, Canary: body.Canary, RequiresApproval: body.RequiresApproval,
+		CorrelationID: correlationID(r),
 	})
 	if err != nil {
 		s.domainError(w, r, err)
@@ -270,6 +272,16 @@ func (s *Server) requestRollback(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusOK
 	}
 	writeJSON(w, status, rb)
+}
+
+func (s *Server) approveDeployment(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	d, err := s.Store.ApproveDeployment(r.Context(), p.OrganizationID, chi.URLParam(r, "id"), p.Email, correlationID(r))
+	if err != nil {
+		s.domainError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
 }
 
 func (s *Server) cancelDeployment(w http.ResponseWriter, r *http.Request) {

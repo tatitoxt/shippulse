@@ -14,7 +14,7 @@ const deploymentColumns = `d.id, d.organization_id, d.service_id, s.slug, d.envi
 	d.failure_profile, d.source, d.actor, d.git_sha, s.repository_full_name, d.status,
 	d.previous_version, d.previous_deployment_id,
 	d.error_code, d.error_message, d.correlation_id, d.attempts, d.created_at, d.started_at, d.finished_at,
-	d.canary_weights`
+	d.canary_weights, d.requires_approval, d.approved_by, d.approved_at`
 
 const deploymentFrom = ` FROM deployments d
 	JOIN services s ON s.id = d.service_id
@@ -25,7 +25,8 @@ func scanDeployment(r pgx.Row) (Deployment, error) {
 	err := r.Scan(&d.ID, &d.OrganizationID, &d.ServiceID, &d.ServiceSlug, &d.EnvironmentID, &d.EnvironmentSlug,
 		&d.Version, &d.FailureProfile, &d.Source, &d.Actor, &d.GitSHA, &d.Repository, &d.Status, &d.PreviousVersion,
 		&d.PreviousDeploymentID, &d.ErrorCode, &d.ErrorMessage, &d.CorrelationID, &d.Attempts,
-		&d.CreatedAt, &d.StartedAt, &d.FinishedAt, &d.CanaryWeights)
+		&d.CreatedAt, &d.StartedAt, &d.FinishedAt, &d.CanaryWeights,
+		&d.RequiresApproval, &d.ApprovedBy, &d.ApprovedAt)
 	return d, err
 }
 
@@ -78,15 +79,19 @@ func (s *Store) CreateDeployment(ctx context.Context, in CreateDeploymentInput) 
 	if in.Canary == nil {
 		in.Canary = []int{}
 	}
+	status := domain.DeploymentQueued
+	if in.RequiresApproval {
+		status = domain.DeploymentAwaitingApproval
+	}
 	var id string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO deployments (organization_id, service_id, environment_id, version, failure_profile,
-			idempotency_key, source, actor, git_sha, correlation_id, canary_weights)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			idempotency_key, source, actor, git_sha, correlation_id, canary_weights, status, requires_approval)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		ON CONFLICT (organization_id, idempotency_key) DO NOTHING
 		RETURNING id`,
 		in.OrganizationID, in.ServiceID, in.EnvironmentID, in.Version, in.FailureProfile,
-		in.IdempotencyKey, in.Source, in.Actor, gitSHA, in.CorrelationID, in.Canary).Scan(&id)
+		in.IdempotencyKey, in.Source, in.Actor, gitSHA, in.CorrelationID, in.Canary, status, in.RequiresApproval).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// A concurrent request with the same key won the race.
 		_ = tx.Rollback(ctx)
@@ -105,12 +110,16 @@ func (s *Store) CreateDeployment(ctx context.Context, in CreateDeploymentInput) 
 			return Deployment{}, false, fmt.Errorf("insert step %s: %w", name, err)
 		}
 	}
-	if err := insertOutbox(ctx, tx, in.OrganizationID, id, domain.EventDeploymentRequested, in.CorrelationID); err != nil {
-		return Deployment{}, false, err
+	// Approval-gated deployments are queued for work only once approved.
+	if !in.RequiresApproval {
+		if err := insertOutbox(ctx, tx, in.OrganizationID, id, domain.EventDeploymentRequested, in.CorrelationID); err != nil {
+			return Deployment{}, false, err
+		}
 	}
 	if err := insertAudit(ctx, tx, in.OrganizationID, in.Actor, "deployment.requested", "deployment", id, in.CorrelationID,
 		map[string]any{"version": in.Version, "source": in.Source, "failure_profile": in.FailureProfile,
-			"service_id": in.ServiceID, "environment_id": in.EnvironmentID, "canary": in.Canary}); err != nil {
+			"service_id": in.ServiceID, "environment_id": in.EnvironmentID, "canary": in.Canary,
+			"requires_approval": in.RequiresApproval}); err != nil {
 		return Deployment{}, false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -121,7 +130,8 @@ func (s *Store) CreateDeployment(ctx context.Context, in CreateDeploymentInput) 
 }
 
 func checkSameRequest(d Deployment, in CreateDeploymentInput) (Deployment, bool, error) {
-	if d.ServiceID != in.ServiceID || d.EnvironmentID != in.EnvironmentID || d.Version != in.Version {
+	if d.ServiceID != in.ServiceID || d.EnvironmentID != in.EnvironmentID || d.Version != in.Version ||
+		d.RequiresApproval != in.RequiresApproval {
 		return d, false, fmt.Errorf("%w: idempotency key already used for a different deployment", domain.ErrConflict)
 	}
 	return d, false, nil
@@ -240,6 +250,47 @@ func (s *Store) CancelDeployment(ctx context.Context, org, id, actor, corr strin
 		return Deployment{}, err
 	}
 	if err := insertAudit(ctx, tx, org, actor, "deployment.cancelled", "deployment", id, corr, nil); err != nil {
+		return Deployment{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Deployment{}, err
+	}
+	return s.GetDeployment(ctx, org, id)
+}
+
+// ApproveDeployment releases an awaiting_approval deployment for execution:
+// it records the approver, moves the deployment to queued and enqueues the
+// worker job, all in one transaction. Approvals are one-shot — a second
+// approval conflicts.
+func (s *Store) ApproveDeployment(ctx context.Context, org, id, actor, corr string) (Deployment, error) {
+	if !validUUID(id) {
+		return Deployment{}, domain.ErrNotFound
+	}
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return Deployment{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var status string
+	err = tx.QueryRow(ctx, `SELECT status FROM deployments WHERE organization_id = $1 AND id = $2 FOR UPDATE`, org, id).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Deployment{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return Deployment{}, err
+	}
+	if !domain.CanTransitionDeployment(domain.DeploymentStatus(status), domain.DeploymentQueued) {
+		return Deployment{}, fmt.Errorf("%w: deployment is %s; only awaiting_approval deployments can be approved", domain.ErrConflict, status)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE deployments
+		SET status = 'queued', approved_by = $2, approved_at = now()
+		WHERE id = $1`, id, actor); err != nil {
+		return Deployment{}, err
+	}
+	if err := insertOutbox(ctx, tx, org, id, domain.EventDeploymentRequested, corr); err != nil {
+		return Deployment{}, err
+	}
+	if err := insertAudit(ctx, tx, org, actor, "deployment.approved", "deployment", id, corr, nil); err != nil {
 		return Deployment{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

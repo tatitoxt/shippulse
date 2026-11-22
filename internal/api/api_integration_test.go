@@ -140,6 +140,32 @@ func TestManualDeployIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestApprovalGateReleasesDeployment(t *testing.T) {
+	base, acme, _ := newServer(t)
+	e := login(t, base, "operator@acme.example")
+
+	body := map[string]any{"service_id": acme.Service, "environment_id": acme.Env, "version": "v2.0.0",
+		"failure_profile": "healthy", "requires_approval": true}
+	code, d := e.do("POST", "/api/v1/deployments", body, map[string]string{"Idempotency-Key": uuid.NewString()})
+	if code != http.StatusAccepted || d["status"] != "awaiting_approval" || d["requires_approval"] != true {
+		t.Fatalf("create: %d %v", code, d)
+	}
+	id := d["id"].(string)
+
+	// Viewers cannot approve; engineers can.
+	v := login(t, base, "viewer@acme.example")
+	if code, _ := v.do("POST", "/api/v1/deployments/"+id+"/approve", nil, nil); code != http.StatusForbidden {
+		t.Fatalf("viewer approve: %d", code)
+	}
+	code, a := e.do("POST", "/api/v1/deployments/"+id+"/approve", nil, nil)
+	if code != http.StatusOK || a["status"] != "queued" || a["approved_by"] != "operator@acme.example" {
+		t.Fatalf("approve: %d %v", code, a)
+	}
+	if code, _ := e.do("POST", "/api/v1/deployments/"+id+"/approve", nil, nil); code != http.StatusConflict {
+		t.Fatalf("second approval: %d", code)
+	}
+}
+
 func TestViewerCannotDeploy(t *testing.T) {
 	base, acme, _ := newServer(t)
 	v := login(t, base, "viewer@acme.example")

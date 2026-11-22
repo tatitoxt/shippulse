@@ -13,11 +13,12 @@ import (
 type DeploymentStatus string
 
 const (
-	DeploymentQueued    DeploymentStatus = "queued"
-	DeploymentRunning   DeploymentStatus = "running"
-	DeploymentSucceeded DeploymentStatus = "succeeded"
-	DeploymentFailed    DeploymentStatus = "failed"
-	DeploymentCancelled DeploymentStatus = "cancelled"
+	DeploymentQueued           DeploymentStatus = "queued"
+	DeploymentAwaitingApproval DeploymentStatus = "awaiting_approval"
+	DeploymentRunning          DeploymentStatus = "running"
+	DeploymentSucceeded        DeploymentStatus = "succeeded"
+	DeploymentFailed           DeploymentStatus = "failed"
+	DeploymentCancelled        DeploymentStatus = "cancelled"
 )
 
 func (s DeploymentStatus) Terminal() bool {
@@ -25,8 +26,9 @@ func (s DeploymentStatus) Terminal() bool {
 }
 
 var deploymentTransitions = map[DeploymentStatus][]DeploymentStatus{
-	DeploymentQueued:  {DeploymentRunning, DeploymentCancelled},
-	DeploymentRunning: {DeploymentSucceeded, DeploymentFailed},
+	DeploymentAwaitingApproval: {DeploymentQueued, DeploymentCancelled},
+	DeploymentQueued:           {DeploymentRunning, DeploymentCancelled},
+	DeploymentRunning:          {DeploymentSucceeded, DeploymentFailed},
 }
 
 // CanTransitionDeployment reports whether from -> to is a legal move.

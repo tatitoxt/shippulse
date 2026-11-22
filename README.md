@@ -60,6 +60,11 @@ that an operator can see the evidence afterwards.
 - **Automatic rollback**: a failed health probe marks the deployment `failed` and queues a
   separate rollback operation that re-applies and re-probes the previous stable version.
   Rollbacks that fail are reported as failed (never as "rolled back") and can be retried manually.
+- **Approval gates**: a deployment created with `"requires_approval": true` stays in
+  `awaiting_approval` — no worker job is enqueued — until an engineer calls
+  `POST /api/v1/deployments/{id}/approve`, which records the approver, moves it to
+  `queued` and enqueues work in one transaction. Approval is one-shot (a second call
+  conflicts) and an awaiting deployment can still be cancelled.
 - **Audit log**: append-only table (updates/deletes are rejected by a trigger); sensitive
   metadata keys are redacted.
 - **Live updates over SSE**: `GET /api/v1/events` streams org-scoped change events emitted by

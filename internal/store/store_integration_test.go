@@ -34,10 +34,10 @@ func setup(t *testing.T) (*store.Store, testutil.Target) {
 func TestMigrationsAreIdempotent(t *testing.T) {
 	s, _ := setup(t)
 	v, err := migrate.Up(context.Background(), s.Pool)
-	if err != nil || v != 5 {
+	if err != nil || v != 6 {
 		t.Fatalf("re-running migrations: version=%d err=%v", v, err)
 	}
-	if n := testutil.Count(t, s, `SELECT count(*) FROM schema_migrations`); n != 5 {
+	if n := testutil.Count(t, s, `SELECT count(*) FROM schema_migrations`); n != 6 {
 		t.Fatalf("schema_migrations rows: %d", n)
 	}
 }
@@ -262,6 +262,55 @@ func TestCancelOnlyWhileQueued(t *testing.T) {
 	}
 	if _, res, _ := s.ClaimDeployment(ctx, d.ID, "w1", time.Minute); res != store.ClaimDone {
 		t.Fatal("cancelled deployment must not be executed")
+	}
+}
+
+func TestApprovalGateHoldsThenReleasesDeployment(t *testing.T) {
+	s, tg := setup(t)
+	ctx := context.Background()
+	in := input(tg, "v2.0.0", "k-approve")
+	in.RequiresApproval = true
+	d, created, err := s.CreateDeployment(ctx, in)
+	if err != nil || !created {
+		t.Fatalf("create: %v created=%v", err, created)
+	}
+	if d.Status != "awaiting_approval" || !d.RequiresApproval {
+		t.Fatalf("unexpected deployment: %+v", d)
+	}
+	// No worker job until approved.
+	if n := testutil.Count(t, s, `SELECT count(*) FROM outbox_events WHERE aggregate_id = $1`, d.ID); n != 0 {
+		t.Fatalf("outbox rows before approval: %d", n)
+	}
+	a, err := s.ApproveDeployment(ctx, tg.Org, d.ID, "lead@acme.example", "corr-approve")
+	if err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if a.Status != "queued" || a.ApprovedBy == nil || *a.ApprovedBy != "lead@acme.example" || a.ApprovedAt == nil {
+		t.Fatalf("approved deployment: %+v", a)
+	}
+	if n := testutil.Count(t, s, `SELECT count(*) FROM outbox_events WHERE aggregate_id = $1 AND event_type = $2`, d.ID, domain.EventDeploymentRequested); n != 1 {
+		t.Fatalf("outbox rows after approval: %d", n)
+	}
+	if _, err := s.ApproveDeployment(ctx, tg.Org, d.ID, "lead@acme.example", "corr"); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("second approval must conflict: %v", err)
+	}
+}
+
+func TestAwaitingApprovalCanBeCancelled(t *testing.T) {
+	s, tg := setup(t)
+	ctx := context.Background()
+	in := input(tg, "v2.1.0", "k-cancel-awaiting")
+	in.RequiresApproval = true
+	d, _, err := s.CreateDeployment(ctx, in)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	c, err := s.CancelDeployment(ctx, tg.Org, d.ID, "operator@acme.example", "corr")
+	if err != nil || c.Status != "cancelled" {
+		t.Fatalf("cancel awaiting_approval: %+v %v", c, err)
+	}
+	if _, err := s.ApproveDeployment(ctx, tg.Org, d.ID, "lead@acme.example", "corr"); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("approve after cancel must conflict: %v", err)
 	}
 }
 

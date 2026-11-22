@@ -90,6 +90,10 @@ cd shippulse
 make demo          # builds and starts the stack, then runs the scripted demo
 ```
 
+<p align="center">
+  <img src="docs/demo.svg" width="880" alt="two healthy deploys, failed health probe and automatic rollback with audit trail">
+</p>
+
 `make demo` deploys `checkout-api` to `staging` three times through the real HTTP API:
 
 1. `v1.0.0` manual deploy, healthy → **succeeded**

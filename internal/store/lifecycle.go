@@ -373,3 +373,28 @@ func (s *Store) FinishRollback(ctx context.Context, rb Rollback, owner string, o
 	}
 	return tx.Commit(ctx)
 }
+
+// WhileQueued runs fn while holding a share lock on the deployment if it is
+// still queued. ClaimDeployment needs a row lock, so no worker can start the
+// deployment (and report a newer status) until fn returns. It reports whether
+// fn ran.
+func (s *Store) WhileQueued(ctx context.Context, org, id string, fn func()) (bool, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var status string
+	err = tx.QueryRow(ctx, `SELECT status FROM deployments WHERE organization_id = $1 AND id = $2 FOR SHARE`, org, id).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, domain.ErrNotFound
+	}
+	if err != nil {
+		return false, err
+	}
+	if status != string(domain.DeploymentQueued) {
+		return false, nil
+	}
+	fn()
+	return true, tx.Commit(ctx)
+}

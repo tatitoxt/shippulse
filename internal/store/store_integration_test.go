@@ -479,3 +479,36 @@ func TestSupersededFailureIsNotRollbackEligible(t *testing.T) {
 		t.Fatalf("rolling back a superseded failure would overwrite v3: %v", err)
 	}
 }
+
+func TestWhileQueuedHoldsOffWorkersUntilDone(t *testing.T) {
+	s, tg := setup(t)
+	ctx := context.Background()
+	d, _, _ := s.CreateDeployment(ctx, input(tg, "v1", "k1"))
+	released := make(chan time.Time, 1)
+	claimed := make(chan time.Time, 1)
+	inside := make(chan struct{})
+	go func() {
+		ran, err := s.WhileQueued(ctx, tg.Org, d.ID, func() {
+			close(inside)
+			time.Sleep(300 * time.Millisecond)
+			released <- time.Now()
+		})
+		if err != nil || !ran {
+			t.Errorf("WhileQueued: ran=%v err=%v", ran, err)
+		}
+	}()
+	<-inside
+	go func() {
+		if _, res, err := s.ClaimDeployment(ctx, d.ID, "w", time.Minute); err != nil || res != store.Claimed {
+			t.Errorf("claim: %v %v", res, err)
+		}
+		claimed <- time.Now()
+	}()
+	r, c := <-released, <-claimed
+	if c.Before(r) {
+		t.Fatalf("worker claimed the deployment while the queued status was still being posted")
+	}
+	if ran, err := s.WhileQueued(ctx, tg.Org, d.ID, func() { t.Error("ran for a running deployment") }); ran || err != nil {
+		t.Fatalf("running deployment: ran=%v err=%v", ran, err)
+	}
+}

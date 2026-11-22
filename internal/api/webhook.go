@@ -135,10 +135,16 @@ func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusAccepted
 	if !created {
 		status = http.StatusOK
-	} else {
+	} else if s.Statuses.Enabled() {
 		// Report "queued" now: the worker only reports once it claims the job,
 		// which can be much later when the target is busy with another release.
-		s.reportGitHub(ctx, d, domain.DeploymentQueued, fmt.Sprintf("%s queued for %s", d.Version, d.EnvironmentSlug))
+		// The row lock keeps a worker from claiming (and reporting a newer
+		// state) until this post is done, so "queued" never overwrites it.
+		if _, err := s.Store.WhileQueued(ctx, org, d.ID, func() {
+			s.reportGitHub(ctx, d, domain.DeploymentQueued, fmt.Sprintf("%s queued for %s", d.Version, d.EnvironmentSlug))
+		}); err != nil {
+			s.Log.Warn("github queued status skipped", "deployment_id", d.ID, "err", err)
+		}
 	}
 	writeJSON(w, status, map[string]any{"status": "queued", "deployment_id": d.ID, "duplicate": !created})
 }

@@ -33,11 +33,16 @@ func setup(t *testing.T) (*store.Store, testutil.Target) {
 
 func TestMigrationsAreIdempotent(t *testing.T) {
 	s, _ := setup(t)
-	v, err := migrate.Up(context.Background(), s.Pool)
-	if err != nil || v != 7 {
-		t.Fatalf("re-running migrations: version=%d err=%v", v, err)
+	all, err := migrate.Load()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if n := testutil.Count(t, s, `SELECT count(*) FROM schema_migrations`); n != 7 {
+	latest := all[len(all)-1].Version
+	v, err := migrate.Up(context.Background(), s.Pool)
+	if err != nil || v != latest {
+		t.Fatalf("re-running migrations: version=%d (want %d) err=%v", v, latest, err)
+	}
+	if n := testutil.Count(t, s, `SELECT count(*) FROM schema_migrations`); n != len(all) {
 		t.Fatalf("schema_migrations rows: %d", n)
 	}
 }

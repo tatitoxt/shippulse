@@ -36,3 +36,6 @@ dist/
 data/
 tmp/
 *.log
+
+# Local, machine-specific compose overrides (e.g. a different host port)
+docker-compose.override.yml

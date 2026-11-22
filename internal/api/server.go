@@ -17,6 +17,7 @@ import (
 	"github.com/tatitoxt/shippulse/internal/auth"
 	"github.com/tatitoxt/shippulse/internal/domain"
 	"github.com/tatitoxt/shippulse/internal/ghstatus"
+	"github.com/tatitoxt/shippulse/internal/metrics"
 	"github.com/tatitoxt/shippulse/internal/provider"
 	"github.com/tatitoxt/shippulse/internal/store"
 )
@@ -27,6 +28,7 @@ type Server struct {
 	Runtime       provider.Provider  // used read-only to show the observed runtime
 	WebhookSecret string             // GitHub webhook HMAC secret; empty disables the endpoint
 	Statuses      *ghstatus.Reporter // best-effort GitHub commit statuses; nil/disabled = no-op
+	Metrics       *metrics.Exporter  // Prometheus exporter; nil disables /metrics
 	Log           *slog.Logger
 
 	notifier     *notifier
@@ -52,6 +54,9 @@ func (s *Server) Router() http.Handler {
 	r.Use(middleware.RealIP, s.correlation, s.accessLog, middleware.Recoverer)
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	r.Get("/readyz", s.ready)
+	if s.Metrics != nil {
+		r.Get("/metrics", s.Metrics.Handler().ServeHTTP)
+	}
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Post("/auth/login", s.login)
@@ -105,6 +110,9 @@ func (s *Server) accessLog(next http.Handler) http.Handler {
 		start := time.Now()
 		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 		next.ServeHTTP(ww, r)
+		if s.Metrics != nil {
+			s.Metrics.ObserveRequest(r.Method, ww.Status())
+		}
 		s.Log.Info("http", "method", r.Method, "path", r.URL.Path, "status", ww.Status(),
 			"duration_ms", time.Since(start).Milliseconds(), "correlation_id", correlationID(r))
 	})

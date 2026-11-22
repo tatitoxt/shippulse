@@ -75,6 +75,9 @@ that an operator can see the evidence afterwards.
   `git_sha`, and the API posts `error` when a queued deploy is cancelled. Reporting is
   best-effort — a GitHub failure is logged, never fails the deploy. `GITHUB_API_URL`
   overrides the API base (e.g. GHES) and `STATUS_TARGET_BASE` links statuses to a dashboard.
+- **Prometheus metrics**: `GET /metrics` exposes deployments/steps/rollbacks by status,
+  deployment duration p50/p95 (computed at scrape time, so it covers every api and
+  worker process), outbox backlog, and per-process HTTP request counters.
 - **Web console** (Next.js): services with promoted vs. actually-running version, deploy form,
   deployment list, per-deployment steps, rollback and runtime evidence, audit trail.
 - **Multi-tenant**: two synthetic organizations (`Acme Demo`, `Globex Demo`); every query is
@@ -188,7 +191,9 @@ pull request and push to `main`, together with `make demo`.
 - SSE replay covers only the last hour (`change_events` retention); an event missed for longer
   is only caught by the 30 s poll backstop, and there is no fallback for clients that block
   `EventSource`.
-- No metrics/tracing pipeline: logs are structured JSON with correlation ids only.
+- `GET /metrics` serves Prometheus exposition (deployments/steps/rollbacks by status,
+  duration p50/p95, outbox backlog, per-process HTTP counters). It is unauthenticated,
+  like `/healthz` — bind the api to a private interface in real deployments. No tracing.
 - Not security-audited and not deployed anywhere; the Compose file is for local demos.
 
 ## License

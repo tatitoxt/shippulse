@@ -129,5 +129,7 @@ Errors are `{"code","message","correlation_id"}`; no stack traces.
 
 ## Out of scope
 
-Real infrastructure (`kubectl`, SSH, cloud APIs), canary/traffic shifting,
-multi-region, production secrets, billing and any availability claims.
+Running against real infrastructure: the `kubectl` and Nomad providers and the canary
+traffic shifting added later are opt-in and only tested against fakes. Also out of scope:
+SSH or cloud-API providers, multi-region, production secrets, billing and any
+availability claims.

@@ -9,8 +9,11 @@ transactional outbox, delivered through NATS JetStream to an idempotent worker, 
 when probes fail. Every step is recorded in an append-only audit log and shown in a web console
 that reads the real API.
 
-> Scope: the runtime is a deterministic simulator (`internal/simruntime`). ShipPulse does not
-> deploy to Kubernetes, VMs or any real infrastructure, and it has no production users.
+> Scope: the default runtime is a deterministic simulator (`internal/simruntime`), and the demo,
+> integration and E2E tests all run against it. Kubernetes (`kubectl`) and Nomad backends exist
+> behind the same `Provider` interface but are opt-in and only tested against fakes (a stubbed
+> `kubectl` runner and an `httptest` Nomad API), never against a real cluster. ShipPulse has no
+> production users.
 
 ## The problem
 
@@ -46,7 +49,7 @@ that an operator can see the evidence afterwards.
   `histogram_quantile` latency checks (e.g.
   `[{"name":"p99","query":"histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m]))","threshold":0.5}]`); every check must pass, and rollback names the breached check. The simulated runtime
   supports the failure profiles `healthy`, `unhealthy`, `timeout` and `provider_unavailable`.
-- **Real provider (opt-in)**: `PROVIDER=kubectl` swaps the simulated runtime for a real
+- **Real provider backends (opt-in, untested against real clusters)**: `PROVIDER=kubectl` swaps the simulated runtime for a real
   Kubernetes backend driven by the `kubectl` CLI. It maps each target to a Deployment
   named `<service>-<environment>` in `KUBECTL_NAMESPACE` (default `default`), applies via
   `kubectl set image`, probes by ready replicas, and — with `CANARY_INGRESS=true` —
@@ -182,39 +185,51 @@ One Go module, one binary with subcommands (`migrate`, `seed`, `api`, `worker`, 
 | Audits | `make vuln` | govulncheck and `npm audit --audit-level=high` |
 
 Measured in this repository (count them with `go test -list . ./...` and
-`go test -tags=integration -list . ./...`): 56 Go test functions — 22 unit and 34 integration —
+`go test -tags=integration -list . ./...`): 101 Go test functions — 51 unit and 50 integration —
 plus 3 Playwright E2E tests. The SSE endpoint is covered by live integration tests that drive a
 deployment through real `pg_notify` triggers and assert org isolation on the stream. All of them run in [GitHub Actions](.github/workflows/ci.yml) on every
 pull request and push to `main`, together with `make demo`.
 
+## Benchmarks
+
+Measured in a Devin VM (8 vCPU Intel Xeon, 31 GiB RAM) against the Compose PostgreSQL 16.10 and
+NATS 2.11.9 containers, with the in-memory provider and the healthy profile, so this is the
+control-plane overhead only. Details and reproduction commands: [docs/benchmarks.md](docs/benchmarks.md).
+
+| Benchmark | Result |
+|---|---|
+| `BenchmarkDeploymentEndToEnd` (create → promoted, sequential, 3 runs × 30) | 29.8–33.1 ms per deployment |
+| `TestLoadMultiWorker` (8 workers, 120 deployments) | 5.5 s, about 21.8 deployments/s, every step ran exactly once |
+
+These are local measurements on one machine, not production numbers.
+
 ## Limitations
 
-- The runtime is simulated in memory: its state resets when the `simruntime` container restarts,
-  and "health" is decided by the failure profile chosen at deploy time.
-- Single worker process in the demo; multiple workers are supported by leases and verified by a
-  multi-worker load test (docs/benchmarks.md: ~22.5ms create→promote sequential, ~21.6 deployments/sec
-  aggregate with 8 workers, zero duplicate step executions).
-- GitHub integration receives signed `deployment` events and reports both commit
-  statuses and `deployment_statuses` back to the triggering GitHub deployment
-  (`GITHUB_TOKEN`), so the repo's Environments view tracks queued → in_progress →
-  outcome. ShipPulse still does not create GitHub Deployments itself.
-- Authentication is email/password with HS256 JWTs for seeded demo users, with a
-  sliding-window rate limit on failed sign-ins (5 per 5 min per IP+email → 429).
-  There is no sign-up, password reset, SSO or token revocation.
-- SSE replay covers only the last hour (`change_events` retention); an event missed for longer
-  is only caught by the 30 s poll backstop, and there is no fallback for clients that block
-  `EventSource`.
-- `GET /metrics` serves Prometheus exposition (deployments/steps/rollbacks by status,
-  duration p50/p95, outbox backlog, per-process HTTP counters). It is unauthenticated,
-  like `/healthz` — bind the api to a private interface in real deployments. End-to-end
-  OpenTelemetry traces (API → outbox → worker, W3C traceparent across the bus) activate
-  with `OTEL_EXPORTER_OTLP_ENDPOINT` and are no-ops otherwise.
+- The default runtime is simulated in memory: its state resets when the `simruntime` container
+  restarts, and "health" is decided by the failure profile chosen at deploy time.
+- The `kubectl` and Nomad providers, the Prometheus canary gate and OTLP trace export are tested
+  only against fakes or in-process collectors; none has been run against real infrastructure.
+- The demo runs a single worker process. Multiple workers are covered by the load test above,
+  on one machine only.
+- GitHub integration receives signed `deployment` events and reports commit statuses and
+  `deployment_statuses` back (`GITHUB_TOKEN`); it does not create GitHub Deployments itself.
+- Authentication is email/password with HS256 JWTs for seeded demo users, with a sliding-window
+  limit on failed sign-ins (5 per 5 min per IP+email → 429). The limiter is in-memory per API
+  process. There is no sign-up, password reset, SSO or token revocation.
+- SSE replay covers only the last hour (`change_events` retention); older gaps are caught by the
+  30 s poll backstop.
+- `GET /metrics` is unauthenticated, like `/healthz`; bind the API to a private interface in any
+  real deployment.
 - Not security-audited and not deployed anywhere; the Compose file is for local demos.
+
+## Roadmap
+
+- Run the `kubectl` provider in CI against a throwaway kind cluster.
+- Create GitHub Deployments from ShipPulse (not only report on existing ones).
+- Shared (database-backed) login rate limiting across API replicas.
+- Authenticated `/metrics` and token revocation.
 
 ## License
 
 [MIT](LICENSE) © Fausto Pastura
 
-## Benchmarks
-
-`go test -tags integration -bench DeploymentEndToEnd` drives the full pipeline (Postgres outbox -> relay -> JetStream -> worker -> promoted): **22.5 ms** create-to-promote, ~44 deployments/sec sequential. See [docs/benchmarks.md](docs/benchmarks.md).

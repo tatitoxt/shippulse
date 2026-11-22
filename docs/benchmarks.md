@@ -1,66 +1,46 @@
 # Benchmarks
 
-Measured end-to-end through the real pipeline — `CreateDeployment` → Postgres
-transactional outbox → relay → JetStream → worker → promoted — not a mocked
-unit. The benchmark lives in
-`internal/worker/bench_integration_test.go`.
+All numbers below were measured on 2026-11-22 in a Devin VM (8 vCPU Intel Xeon, 31 GiB RAM)
+against the Docker Compose `postgres:16.10-alpine` and `nats:2.11.9-alpine` containers. Both
+benchmarks run the real pipeline (`CreateDeployment` → PostgreSQL transactional outbox → relay →
+JetStream → worker → promoted) with the in-memory provider and the `healthy` profile, so they
+measure control-plane overhead only. A real provider adds its own apply and probe time on top.
+They are local measurements on one machine, not production numbers.
 
-**How to reproduce**
+Start the dependencies first:
 
 ```sh
-TEST_DATABASE_URL=postgres://shippulse:shippulse@host:5432/shippulse \
-TEST_NATS_URL=nats://host:4222 \
-go test -tags integration -run '^$' \
-  -bench DeploymentEndToEnd -benchtime=30x -count=1 ./internal/worker/
+make deps-up
+export TEST_DATABASE_URL=postgres://shippulse:shippulse@localhost:5432/shippulse?sslmode=disable
+export TEST_NATS_URL=nats://localhost:4222
 ```
 
-**Results (2026-11-21, 30 sequential deployments, local Postgres 17 + NATS)**
+## Sequential latency
 
-| Metric | Value |
+`internal/worker/bench_integration_test.go`
+
+```sh
+go test -tags integration -run '^$' -bench DeploymentEndToEnd -benchtime=30x -count=3 ./internal/worker/
+```
+
+| Run | Create → promoted |
 |---|---:|
-| Create → promoted latency | **22.5 ms** per deployment (ns/op) |
-| Sustained throughput | ~44 deployments/sec, sequential |
+| 1 | 29.8 ms/op |
+| 2 | 33.1 ms/op |
+| 3 | 30.4 ms/op |
 
-**Reading the numbers**
+The outbox relay polls every 20 ms in this test, which accounts for a large share of the latency.
 
-- Each iteration covers the full round trip: row insert + outbox write, relay
-  poll, JetStream publish/consume, worker steps (apply + health probe), and
-  status write-back.
-- The bench uses the in-memory provider with a healthy profile, so this is
-  the control-plane floor: real cloud providers add their own apply and probe
-  time on top.
-- Latency is dominated by the relay's 20 ms poll interval; a bus-triggered
-  relay could cut it further.
+## Multi-worker load test
 
-## Multi-worker throughput (2026-11-22)
-
-`internal/worker/load_integration_test.go` runs the real pipeline with
-several workers sharing the durable JetStream queue-group consumer — the same
-topology as separate worker processes. For each pool size it verifies every
-deployment reaches `succeeded` and that every step ran exactly one attempt
-(a second claimant loses the lease, so duplicate execution cannot hide).
-
-**How to reproduce**
+`internal/worker/load_integration_test.go` starts 8 workers on one durable JetStream consumer
+(the same topology as 8 worker processes), creates 120 deployments, and asserts that every
+deployment succeeds and every step has `attempts = 1` (no duplicate execution).
 
 ```sh
-TEST_DATABASE_URL=postgres://shippulse:shippulse@host:5432/shippulse \
-TEST_NATS_URL=nats://host:4222 \
-go test -tags integration -run TestLoadMultiWorker -v ./internal/worker/
+go test -tags integration -count=1 -run TestLoadMultiWorker -v ./internal/worker/
 ```
 
-**Results (local Postgres 17 + NATS, in-memory provider)**
-
-| Workers | Deployments | Wall time | Throughput | Duplicates |
-|--------:|------------:|----------:|-----------:|-----------:|
-| 4 | 60 | 7.2 s | ~9.6 deployments/sec | 0 |
-| 8 | 120 | 5.6 s | ~21.6 deployments/sec | 0 |
-
-**Reading the numbers**
-
-- Throughput scales with the worker count (~2.2× from 4 to 8): per-deployment
-  control-plane latency (~0.4 s: relay poll + lease claim + 4 step
-  transactions + health probe) is the bound, not contention — workers never
-  fight over the same job.
-- "Duplicates: 0" is the important invariant: `attempts = 1` on every step of
-  every deployment, so leases guarantee exactly-once processing under
-  horizontal scaling.
+| Workers | Deployments | Wall time | Throughput | Steps run more than once |
+|---:|---:|---:|---:|---:|
+| 8 | 120 | 5.5 s | about 21.8 deployments/s | 0 |

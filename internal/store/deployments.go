@@ -258,6 +258,33 @@ func (s *Store) CancelDeployment(ctx context.Context, org, id, actor, corr strin
 	return s.GetDeployment(ctx, org, id)
 }
 
+// RetryDeployment clones a terminal deployment into a fresh run of the same
+// version on the same service/environment, keeping canary weights and the
+// approval gate (a gated retry lands in awaiting_approval again). The clone's
+// idempotency key is retry:<source id>, so repeating the call returns the
+// existing clone instead of deploying twice.
+func (s *Store) RetryDeployment(ctx context.Context, org, id, actor, corr string) (Deployment, bool, error) {
+	src, err := s.GetDeployment(ctx, org, id)
+	if err != nil {
+		return Deployment{}, false, err
+	}
+	if !domain.DeploymentStatus(src.Status).Terminal() {
+		return Deployment{}, false, fmt.Errorf(
+			"%w: deployment is %s; only succeeded, failed or cancelled deployments can be retried",
+			domain.ErrConflict, src.Status)
+	}
+	gitSHA := ""
+	if src.GitSHA != nil {
+		gitSHA = *src.GitSHA
+	}
+	return s.CreateDeployment(ctx, CreateDeploymentInput{
+		OrganizationID: org, ServiceID: src.ServiceID, EnvironmentID: src.EnvironmentID,
+		Version: src.Version, FailureProfile: src.FailureProfile,
+		IdempotencyKey: "retry:" + src.ID, Source: "retry", Actor: actor, GitSHA: gitSHA,
+		Canary: src.CanaryWeights, RequiresApproval: src.RequiresApproval, CorrelationID: corr,
+	})
+}
+
 // ApproveDeployment releases an awaiting_approval deployment for execution:
 // it records the approver, moves the deployment to queued and enqueues the
 // worker job, all in one transaction. Approvals are one-shot — a second

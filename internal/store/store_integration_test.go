@@ -34,10 +34,10 @@ func setup(t *testing.T) (*store.Store, testutil.Target) {
 func TestMigrationsAreIdempotent(t *testing.T) {
 	s, _ := setup(t)
 	v, err := migrate.Up(context.Background(), s.Pool)
-	if err != nil || v != 6 {
+	if err != nil || v != 7 {
 		t.Fatalf("re-running migrations: version=%d err=%v", v, err)
 	}
-	if n := testutil.Count(t, s, `SELECT count(*) FROM schema_migrations`); n != 6 {
+	if n := testutil.Count(t, s, `SELECT count(*) FROM schema_migrations`); n != 7 {
 		t.Fatalf("schema_migrations rows: %d", n)
 	}
 }
@@ -262,6 +262,60 @@ func TestCancelOnlyWhileQueued(t *testing.T) {
 	}
 	if _, res, _ := s.ClaimDeployment(ctx, d.ID, "w1", time.Minute); res != store.ClaimDone {
 		t.Fatal("cancelled deployment must not be executed")
+	}
+}
+
+func TestRetryClonesATerminalDeployment(t *testing.T) {
+	s, tg := setup(t)
+	ctx := context.Background()
+	in := input(tg, "v3.0.0", "k-retry")
+	in.Canary = []int{10}
+	d, _, err := s.CreateDeployment(ctx, in)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// Only terminal deployments can be retried.
+	if _, _, err := s.RetryDeployment(ctx, tg.Org, d.ID, "operator@acme.example", "corr"); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("retry queued: %v", err)
+	}
+	if _, err := s.CancelDeployment(ctx, tg.Org, d.ID, "operator@acme.example", "corr"); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	retry, created, err := s.RetryDeployment(ctx, tg.Org, d.ID, "operator@acme.example", "corr")
+	if err != nil || !created || retry.Status != "queued" {
+		t.Fatalf("retry: created=%v deployment=%+v err=%v", created, retry, err)
+	}
+	if retry.ID == d.ID || retry.Version != d.Version || retry.Source != "retry" || len(retry.CanaryWeights) != 1 || retry.CanaryWeights[0] != 10 {
+		t.Fatalf("clone mismatch: %+v", retry)
+	}
+	if len(retry.Steps) != len(d.Steps) || retry.Steps[0].Name != d.Steps[0].Name {
+		t.Fatalf("steps not cloned: %+v", retry.Steps)
+	}
+	// Retrying again returns the same clone rather than deploying twice.
+	again, created2, err := s.RetryDeployment(ctx, tg.Org, d.ID, "operator@acme.example", "corr")
+	if err != nil || created2 || again.ID != retry.ID {
+		t.Fatalf("second retry: created=%v id=%s err=%v", created2, again.ID, err)
+	}
+}
+
+func TestRetryKeepsTheApprovalGate(t *testing.T) {
+	s, tg := setup(t)
+	ctx := context.Background()
+	in := input(tg, "v3.1.0", "k-retry-gated")
+	in.RequiresApproval = true
+	d, _, err := s.CreateDeployment(ctx, in)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := s.CancelDeployment(ctx, tg.Org, d.ID, "operator@acme.example", "corr"); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	retry, created, err := s.RetryDeployment(ctx, tg.Org, d.ID, "operator@acme.example", "corr")
+	if err != nil || !created || retry.Status != "awaiting_approval" || !retry.RequiresApproval {
+		t.Fatalf("gated retry: %+v %v", retry, err)
+	}
+	if n := testutil.Count(t, s, `SELECT count(*) FROM outbox_events WHERE aggregate_id = $1`, retry.ID); n != 0 {
+		t.Fatalf("gated retry must not be enqueued: %d", n)
 	}
 }
 

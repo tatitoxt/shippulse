@@ -65,6 +65,10 @@ that an operator can see the evidence afterwards.
   `POST /api/v1/deployments/{id}/approve`, which records the approver, moves it to
   `queued` and enqueues work in one transaction. Approval is one-shot (a second call
   conflicts) and an awaiting deployment can still be cancelled.
+- **Retries**: a terminal deployment (`succeeded`, `failed`, `cancelled`) can be cloned into a
+  fresh run of the same version with `POST /api/v1/deployments/{id}/retry` — same service,
+  environment, canary weights and approval gate (a gated retry waits for approval again).
+  Retries are idempotent (`retry:<id>` key): repeating the call returns the existing clone.
 - **Audit log**: append-only table (updates/deletes are rejected by a trigger); sensitive
   metadata keys are redacted.
 - **Live updates over SSE**: `GET /api/v1/events` streams org-scoped change events emitted by

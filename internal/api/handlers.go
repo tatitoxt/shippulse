@@ -284,6 +284,20 @@ func (s *Server) approveDeployment(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, d)
 }
 
+func (s *Server) retryDeployment(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	d, created, err := s.Store.RetryDeployment(r.Context(), p.OrganizationID, chi.URLParam(r, "id"), p.Email, correlationID(r))
+	if err != nil {
+		s.domainError(w, r, err)
+		return
+	}
+	status := http.StatusAccepted
+	if !created {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, d)
+}
+
 func (s *Server) cancelDeployment(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	d, err := s.Store.CancelDeployment(r.Context(), p.OrganizationID, chi.URLParam(r, "id"), p.Email, correlationID(r))

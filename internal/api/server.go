@@ -81,6 +81,7 @@ func (s *Server) Router() http.Handler {
 				r.Post("/deployments/{id}/rollback", s.requestRollback)
 				r.Post("/deployments/{id}/cancel", s.cancelDeployment)
 				r.Post("/deployments/{id}/approve", s.approveDeployment)
+				r.Post("/deployments/{id}/retry", s.retryDeployment)
 			})
 		})
 	})

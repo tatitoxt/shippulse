@@ -185,6 +185,11 @@ function Actions({ deployment: d, onDone }: { deployment: Deployment; onDone: ()
           Cancel
         </button>
       )}
+      {(d.status === "failed" || d.status === "cancelled") && (
+        <button className="btn-secondary" disabled={busy} onClick={() => run(`/deployments/${d.id}/retry`)}>
+          Retry
+        </button>
+      )}
       {(d.status === "succeeded" || d.status === "failed") && d.previous_version && (
         <button
           className="btn-secondary"

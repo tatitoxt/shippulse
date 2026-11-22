@@ -166,6 +166,37 @@ func TestApprovalGateReleasesDeployment(t *testing.T) {
 	}
 }
 
+func TestRetryClonesTerminalDeployment(t *testing.T) {
+	base, acme, _ := newServer(t)
+	e := login(t, base, "operator@acme.example")
+	v := login(t, base, "viewer@acme.example")
+
+	code, d := e.do("POST", "/api/v1/deployments", deployBody(acme, "v3.0.0"), map[string]string{"Idempotency-Key": uuid.NewString()})
+	if code != http.StatusAccepted {
+		t.Fatalf("create: %d", code)
+	}
+	id := d["id"].(string)
+	// A live deployment cannot be retried; cancel it first.
+	if code, _ := e.do("POST", "/api/v1/deployments/"+id+"/retry", nil, nil); code != http.StatusConflict {
+		t.Fatalf("retry queued: %d", code)
+	}
+	if code, _ := e.do("POST", "/api/v1/deployments/"+id+"/cancel", nil, nil); code != http.StatusOK {
+		t.Fatalf("cancel: %d", code)
+	}
+	if code, _ := v.do("POST", "/api/v1/deployments/"+id+"/retry", nil, nil); code != http.StatusForbidden {
+		t.Fatalf("viewer retry: %d", code)
+	}
+	code, r := e.do("POST", "/api/v1/deployments/"+id+"/retry", nil, nil)
+	if code != http.StatusAccepted || r["status"] != "queued" || r["source"] != "retry" || r["version"] != "v3.0.0" || r["id"] == id {
+		t.Fatalf("retry: %d %v", code, r)
+	}
+	// A second retry returns the same clone.
+	code, again := e.do("POST", "/api/v1/deployments/"+id+"/retry", nil, nil)
+	if code != http.StatusOK || again["id"] != r["id"] {
+		t.Fatalf("second retry: %d %v", code, again)
+	}
+}
+
 func TestViewerCannotDeploy(t *testing.T) {
 	base, acme, _ := newServer(t)
 	v := login(t, base, "viewer@acme.example")

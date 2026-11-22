@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -23,6 +25,44 @@ import (
 // dummyHash keeps login timing similar for unknown emails.
 var dummyHash, _ = auth.HashPassword("not-a-real-password")
 
+// loginLimiter throttles failed sign-ins per client IP + email so the demo is
+// not a free credential-stuffing oracle. In-memory like the rest of the demo
+// state; a fleet deployment would move this to Redis.
+type loginLimiter struct {
+	mu    sync.Mutex
+	fails map[string][]time.Time
+}
+
+const (
+	loginMaxFailures = 5
+	loginWindow      = 5 * time.Minute
+)
+
+// blocked reports whether key already hit the failure cap inside the window.
+func (l *loginLimiter) blocked(key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	cutoff := time.Now().Add(-loginWindow)
+	kept := l.fails[key][:0]
+	for _, t := range l.fails[key] {
+		if t.After(cutoff) {
+			kept = append(kept, t)
+		}
+	}
+	l.fails[key] = kept
+	return len(kept) >= loginMaxFailures
+}
+
+func (l *loginLimiter) record(key string, ok bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if ok {
+		delete(l.fails, key)
+		return
+	}
+	l.fails[key] = append(l.fails[key], time.Now())
+}
+
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Email    string `json:"email"`
@@ -31,7 +71,13 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	p, hash, err := s.Store.UserCredentials(r.Context(), strings.TrimSpace(body.Email))
+	email := strings.ToLower(strings.TrimSpace(body.Email))
+	key := r.RemoteAddr + "|" + email
+	if s.loginLimiter.blocked(key) {
+		writeError(w, r, http.StatusTooManyRequests, "rate_limited", "too many failed sign-ins; try again later")
+		return
+	}
+	p, hash, err := s.Store.UserCredentials(r.Context(), email)
 	if err != nil && !errors.Is(err, domain.ErrNotFound) {
 		s.internal(w, r, err)
 		return
@@ -40,9 +86,11 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		hash = dummyHash
 	}
 	if !auth.CheckPassword(hash, body.Password) || errors.Is(err, domain.ErrNotFound) {
+		s.loginLimiter.record(key, false)
 		writeError(w, r, http.StatusUnauthorized, "invalid_credentials", "invalid email or password")
 		return
 	}
+	s.loginLimiter.record(key, true)
 	token, err := s.Auth.Issue(p.UserID, p.OrganizationID, p.Email)
 	if err != nil {
 		s.internal(w, r, err)

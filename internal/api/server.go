@@ -33,6 +33,7 @@ type Server struct {
 
 	notifier     *notifier
 	notifierOnce sync.Once
+	loginLimiter *loginLimiter
 }
 
 // events returns the shared change notifier, started lazily on the first SSE
@@ -50,6 +51,7 @@ const (
 )
 
 func (s *Server) Router() http.Handler {
+	s.loginLimiter = &loginLimiter{fails: make(map[string][]time.Time)}
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP, s.correlation, s.accessLog, middleware.Recoverer)
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })

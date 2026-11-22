@@ -183,11 +183,12 @@ pull request and push to `main`, together with `make demo`.
 - The runtime is simulated in memory: its state resets when the `simruntime` container restarts,
   and "health" is decided by the failure profile chosen at deploy time.
 - Single worker process in the demo; multiple workers are supported by leases and are covered by
-  integration tests, not by a load test. No performance numbers have been measured.
+  integration tests, not by a load test. Measured numbers: docs/benchmarks.md (~22.5ms create→promote, ~44 deployments/sec).
 - GitHub integration is limited to receiving signed `deployment` events plus opt-in
   commit statuses (`GITHUB_TOKEN`); ShipPulse does not create GitHub Deployments itself.
-- Authentication is email/password with HS256 JWTs for seeded demo users. There is no sign-up,
-  password reset, SSO, token revocation or rate limiting.
+- Authentication is email/password with HS256 JWTs for seeded demo users, with a
+  sliding-window rate limit on failed sign-ins (5 per 5 min per IP+email → 429).
+  There is no sign-up, password reset, SSO or token revocation.
 - SSE replay covers only the last hour (`change_events` retention); an event missed for longer
   is only caught by the 30 s poll backstop, and there is no fallback for clients that block
   `EventSource`.

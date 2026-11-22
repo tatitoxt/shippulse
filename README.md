@@ -185,7 +185,7 @@ One Go module, one binary with subcommands (`migrate`, `seed`, `api`, `worker`, 
 | Audits | `make vuln` | govulncheck and `npm audit --audit-level=high` |
 
 Measured in this repository (count them with `go test -list . ./...` and
-`go test -tags=integration -list . ./...`): 101 Go test functions — 51 unit and 50 integration —
+`go test -tags=integration -list . ./...`): 102 Go test functions — 51 unit and 51 integration —
 plus 3 Playwright E2E tests. The SSE endpoint is covered by live integration tests that drive a
 deployment through real `pg_notify` triggers and assert org isolation on the stream. All of them run in [GitHub Actions](.github/workflows/ci.yml) on every
 pull request and push to `main`, together with `make demo`.

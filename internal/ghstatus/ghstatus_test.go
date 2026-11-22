@@ -3,6 +3,7 @@ package ghstatus
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -90,5 +91,63 @@ func TestReportSurfacesHTTPError(t *testing.T) {
 	err := r.Report(context.Background(), "acme/api", "sha", "prod", "d", "success", "x")
 	if err == nil || !strings.Contains(err.Error(), "403") {
 		t.Fatalf("expected HTTP 403 error, got %v", err)
+	}
+}
+
+func TestDeploymentStateFor(t *testing.T) {
+	cases := map[domain.DeploymentStatus]string{
+		domain.DeploymentQueued:           "queued",
+		domain.DeploymentRunning:          "in_progress",
+		domain.DeploymentSucceeded:        "success",
+		domain.DeploymentFailed:           "failure",
+		domain.DeploymentCancelled:        "error",
+		domain.DeploymentAwaitingApproval: "pending",
+	}
+	for in, want := range cases {
+		if got := DeploymentStateFor(in); got != want {
+			t.Errorf("DeploymentStateFor(%s) = %s, want %s", in, got, want)
+		}
+	}
+}
+
+func TestReportDeploymentStatusPostsToDeployment(t *testing.T) {
+	var gotPath, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	r := &Reporter{Token: "t", BaseURL: srv.URL, TargetBase: "https://dash.example.com"}
+	err := r.ReportDeploymentStatus(context.Background(), "acme/api", 12345, "staging",
+		"dep-1", "in_progress", "deploying 1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/repos/acme/api/deployments/12345/statuses" {
+		t.Fatalf("path = %s", gotPath)
+	}
+	for _, want := range []string{`"state":"in_progress"`, `"environment":"staging"`,
+		`"log_url":"https://dash.example.com/deployments/dep-1"`} {
+		if !strings.Contains(gotBody, want) {
+			t.Fatalf("body %s missing %s", gotBody, want)
+		}
+	}
+}
+
+func TestReportDeploymentStatusNoopWithoutID(t *testing.T) {
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	}))
+	defer srv.Close()
+	r := &Reporter{Token: "t", BaseURL: srv.URL}
+	if err := r.ReportDeploymentStatus(context.Background(), "acme/api", 0, "staging", "d", "queued", "x"); err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Fatal("expected no request when ghDeploymentID is 0")
 	}
 }

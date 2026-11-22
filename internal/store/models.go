@@ -92,6 +92,7 @@ type Deployment struct {
 	RequiresApproval     bool       `json:"requires_approval"`
 	ApprovedBy           *string    `json:"approved_by"`
 	ApprovedAt           *time.Time `json:"approved_at"`
+	GitHubDeploymentID   *int64     `json:"github_deployment_id,omitempty"`
 	Steps                []Step     `json:"steps,omitempty"`
 	Rollbacks            []Rollback `json:"rollbacks,omitempty"`
 }
@@ -119,16 +120,17 @@ type OutboxEvent struct {
 
 // CreateDeploymentInput is a validated request to deploy a version.
 type CreateDeploymentInput struct {
-	OrganizationID   string
-	ServiceID        string
-	EnvironmentID    string
-	Version          string
-	FailureProfile   string
-	IdempotencyKey   string
-	Source           string
-	Actor            string
-	GitSHA           string
-	Canary           []int
-	RequiresApproval bool
-	CorrelationID    string
+	OrganizationID     string
+	ServiceID          string
+	EnvironmentID      string
+	Version            string
+	FailureProfile     string
+	IdempotencyKey     string
+	Source             string
+	Actor              string
+	GitSHA             string
+	Canary             []int
+	RequiresApproval   bool
+	CorrelationID      string
+	GitHubDeploymentID int64
 }

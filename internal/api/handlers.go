@@ -13,6 +13,7 @@ import (
 
 	"github.com/tatitoxt/shippulse/internal/auth"
 	"github.com/tatitoxt/shippulse/internal/domain"
+	"github.com/tatitoxt/shippulse/internal/ghstatus"
 	"github.com/tatitoxt/shippulse/internal/provider"
 	"github.com/tatitoxt/shippulse/internal/simruntime"
 	"github.com/tatitoxt/shippulse/internal/store"
@@ -306,8 +307,13 @@ func (s *Server) cancelDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.Statuses != nil && d.GitSHA != nil && d.Repository != nil {
+		description := fmt.Sprintf("deploy of %s cancelled by %s", d.Version, p.Email)
 		s.Statuses.ReportLogged(r.Context(), *d.Repository, *d.GitSHA, d.EnvironmentSlug, d.ID,
-			"error", fmt.Sprintf("deploy of %s cancelled by %s", d.Version, p.Email))
+			"error", description)
+		if d.GitHubDeploymentID != nil {
+			s.Statuses.ReportDeploymentStatusLogged(r.Context(), *d.Repository, *d.GitHubDeploymentID,
+				d.EnvironmentSlug, d.ID, ghstatus.DeploymentStateFor(domain.DeploymentCancelled), description)
+		}
 	}
 	writeJSON(w, http.StatusOK, d)
 }

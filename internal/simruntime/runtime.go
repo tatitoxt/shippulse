@@ -4,9 +4,9 @@
 package simruntime
 
 import (
-	"fmt"
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 

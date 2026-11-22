@@ -194,8 +194,10 @@ pull request and push to `main`, together with `make demo`.
 - Single worker process in the demo; multiple workers are supported by leases and verified by a
   multi-worker load test (docs/benchmarks.md: ~22.5ms create→promote sequential, ~21.6 deployments/sec
   aggregate with 8 workers, zero duplicate step executions).
-- GitHub integration is limited to receiving signed `deployment` events plus opt-in
-  commit statuses (`GITHUB_TOKEN`); ShipPulse does not create GitHub Deployments itself.
+- GitHub integration receives signed `deployment` events and reports both commit
+  statuses and `deployment_statuses` back to the triggering GitHub deployment
+  (`GITHUB_TOKEN`), so the repo's Environments view tracks queued → in_progress →
+  outcome. ShipPulse still does not create GitHub Deployments itself.
 - Authentication is email/password with HS256 JWTs for seeded demo users, with a
   sliding-window rate limit on failed sign-ins (5 per 5 min per IP+email → 429).
   There is no sign-up, password reset, SSO or token revocation.

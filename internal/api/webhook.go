@@ -125,6 +125,7 @@ func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 		OrganizationID: org, ServiceID: serviceID, EnvironmentID: envID, Version: version,
 		FailureProfile: string(profile), IdempotencyKey: "github:" + delivery, Source: "github",
 		Actor: actor, GitSHA: ev.Deployment.SHA, CorrelationID: correlationID(r),
+		GitHubDeploymentID: ev.Deployment.ID,
 	})
 	if err != nil {
 		s.domainError(w, r, err)

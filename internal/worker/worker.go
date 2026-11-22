@@ -47,16 +47,21 @@ type Executor struct {
 	CanaryProbe metrics.Probe
 	Cfg         Config
 	Log         *slog.Logger
-	Statuses *ghstatus.Reporter // best-effort GitHub commit statuses; nil/disabled = no-op
+	Statuses    *ghstatus.Reporter // best-effort GitHub commit statuses; nil/disabled = no-op
 }
 
 // reportStatus posts a commit status for the deployment when it has a
 // repository + git sha. Best-effort: errors are logged inside the reporter.
-func (e *Executor) reportStatus(ctx context.Context, d store.Deployment, state, description string) {
+func (e *Executor) reportStatus(ctx context.Context, d store.Deployment, status domain.DeploymentStatus, description string) {
 	if e.Statuses == nil || d.GitSHA == nil || d.Repository == nil {
 		return
 	}
-	e.Statuses.ReportLogged(ctx, *d.Repository, *d.GitSHA, d.EnvironmentSlug, d.ID, state, description)
+	e.Statuses.ReportLogged(ctx, *d.Repository, *d.GitSHA, d.EnvironmentSlug, d.ID,
+		ghstatus.StateFor(status), description)
+	if d.GitHubDeploymentID != nil {
+		e.Statuses.ReportDeploymentStatusLogged(ctx, *d.Repository, *d.GitHubDeploymentID,
+			d.EnvironmentSlug, d.ID, ghstatus.DeploymentStateFor(status), description)
+	}
 }
 
 // Handle dispatches a job event from the bus.
@@ -100,7 +105,7 @@ func (e *Executor) RunDeployment(ctx context.Context, id string) error {
 	}
 	log := e.Log.With("deployment_id", d.ID, "correlation_id", d.CorrelationID, "version", d.Version)
 	log.Info("deployment claimed", "attempt", d.Attempts)
-	e.reportStatus(ctx, d, "pending", fmt.Sprintf("deploying %s to %s (attempt %d)", d.Version, d.EnvironmentSlug, d.Attempts))
+	e.reportStatus(ctx, d, domain.DeploymentRunning, fmt.Sprintf("deploying %s to %s (attempt %d)", d.Version, d.EnvironmentSlug, d.Attempts))
 
 	done := map[string]bool{}
 	for _, st := range d.Steps {
@@ -130,7 +135,7 @@ func (e *Executor) runSteps(ctx context.Context, d store.Deployment, done map[st
 			return err
 		}
 		log.Warn("deployment failed", "step", f.Step, "error_code", f.Code, "rollback_queued", rb != nil)
-		e.reportStatus(ctx, d, "failure", fmt.Sprintf("%s failed at step %s: %s", d.Version, f.Step, f.Code))
+		e.reportStatus(ctx, d, domain.DeploymentFailed, fmt.Sprintf("%s failed at step %s: %s", d.Version, f.Step, f.Code))
 		return nil
 	}
 
@@ -243,7 +248,7 @@ func (e *Executor) runSteps(ctx context.Context, d store.Deployment, done map[st
 		return err
 	}
 	log.Info("deployment succeeded")
-	e.reportStatus(ctx, d, "success", fmt.Sprintf("%s live on %s", d.Version, d.EnvironmentSlug))
+	e.reportStatus(ctx, d, domain.DeploymentSucceeded, fmt.Sprintf("%s live on %s", d.Version, d.EnvironmentSlug))
 	return nil
 }
 

@@ -116,3 +116,79 @@ func (r *Reporter) ReportLogged(
 		r.Log.Warn("github status report failed", "repo", repo, "sha", sha, "state", state, "error", err)
 	}
 }
+
+// DeploymentStateFor maps a deployment status to a GitHub deployment_status
+// state (the states shown on the repo's Environments view).
+func DeploymentStateFor(s domain.DeploymentStatus) string {
+	switch s {
+	case domain.DeploymentQueued:
+		return "queued"
+	case domain.DeploymentRunning:
+		return "in_progress"
+	case domain.DeploymentSucceeded:
+		return "success"
+	case domain.DeploymentFailed:
+		return "failure"
+	case domain.DeploymentCancelled:
+		return "error"
+	default:
+		return "pending"
+	}
+}
+
+// ReportDeploymentStatus posts a deployment_status back to the GitHub
+// deployment that triggered the run, so the repo's Environments view shows
+// queued → in_progress → success/failure alongside the commit status.
+// Returns nil when disabled or the deployment was not created by GitHub.
+func (r *Reporter) ReportDeploymentStatus(
+	ctx context.Context, repo string, ghDeploymentID int64, environment, deploymentID, state, description string,
+) error {
+	if !r.Enabled() || repo == "" || ghDeploymentID == 0 {
+		return nil
+	}
+	payload := map[string]string{
+		"state":       state,
+		"environment": environment,
+		"description": description,
+	}
+	if r.TargetBase != "" {
+		payload["log_url"] = strings.TrimRight(r.TargetBase, "/") + "/deployments/" + deploymentID
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("%s/repos/%s/deployments/%d/statuses", r.baseURL(), repo, ghDeploymentID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+r.Token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := r.client().Do(req)
+	if err != nil {
+		return fmt.Errorf("github deployment status post: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("github deployment status post: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
+	}
+	return nil
+}
+
+// ReportDeploymentStatusLogged is ReportDeploymentStatus for best-effort
+// callers: errors are warned, never returned.
+func (r *Reporter) ReportDeploymentStatusLogged(
+	ctx context.Context, repo string, ghDeploymentID int64, environment, deploymentID, state, description string,
+) {
+	if !r.Enabled() {
+		return
+	}
+	if err := r.ReportDeploymentStatus(ctx, repo, ghDeploymentID, environment, deploymentID, state, description); err != nil && r.Log != nil {
+		r.Log.Warn("github deployment status report failed",
+			"repo", repo, "github_deployment_id", ghDeploymentID, "state", state, "error", err)
+	}
+}

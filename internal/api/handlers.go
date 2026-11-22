@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -306,16 +307,24 @@ func (s *Server) cancelDeployment(w http.ResponseWriter, r *http.Request) {
 		s.domainError(w, r, err)
 		return
 	}
-	if s.Statuses != nil && d.GitSHA != nil && d.Repository != nil {
-		description := fmt.Sprintf("deploy of %s cancelled by %s", d.Version, p.Email)
-		s.Statuses.ReportLogged(r.Context(), *d.Repository, *d.GitSHA, d.EnvironmentSlug, d.ID,
-			"error", description)
-		if d.GitHubDeploymentID != nil {
-			s.Statuses.ReportDeploymentStatusLogged(r.Context(), *d.Repository, *d.GitHubDeploymentID,
-				d.EnvironmentSlug, d.ID, ghstatus.DeploymentStateFor(domain.DeploymentCancelled), description)
-		}
-	}
+	s.reportGitHub(r.Context(), d, domain.DeploymentCancelled, fmt.Sprintf("deploy of %s cancelled by %s", d.Version, p.Email))
 	writeJSON(w, http.StatusOK, d)
+}
+
+// reportGitHub posts best-effort commit and deployment statuses for a
+// deployment that has a repository and git sha. GitHub problems are logged by
+// the reporter and never change the API response.
+func (s *Server) reportGitHub(ctx context.Context, d store.Deployment, status domain.DeploymentStatus, description string) {
+	if !s.Statuses.Enabled() || d.GitSHA == nil || d.Repository == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	s.Statuses.ReportLogged(ctx, *d.Repository, *d.GitSHA, d.EnvironmentSlug, d.ID, ghstatus.StateFor(status), description)
+	if d.GitHubDeploymentID != nil {
+		s.Statuses.ReportDeploymentStatusLogged(ctx, *d.Repository, *d.GitHubDeploymentID,
+			d.EnvironmentSlug, d.ID, ghstatus.DeploymentStateFor(status), description)
+	}
 }
 
 func (s *Server) listAudit(w http.ResponseWriter, r *http.Request) {

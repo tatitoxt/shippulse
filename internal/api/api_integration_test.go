@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 
 	"github.com/tatitoxt/shippulse/internal/api"
 	"github.com/tatitoxt/shippulse/internal/auth"
+	"github.com/tatitoxt/shippulse/internal/ghstatus"
 	"github.com/tatitoxt/shippulse/internal/provider"
 	"github.com/tatitoxt/shippulse/internal/testutil"
 )
@@ -68,6 +70,11 @@ func (c client) do(method, path string, body any, headers map[string]string) (in
 
 func newServer(t *testing.T) (string, testutil.Target, testutil.Target) {
 	t.Helper()
+	return newServerWith(t, nil)
+}
+
+func newServerWith(t *testing.T, configure func(*api.Server)) (string, testutil.Target, testutil.Target) {
+	t.Helper()
 	s := testutil.DB(t, "api")
 	iss, err := auth.NewIssuer("integration-jwt-secret-0123456789abcdef", time.Hour)
 	if err != nil {
@@ -75,6 +82,9 @@ func newServer(t *testing.T) (string, testutil.Target, testutil.Target) {
 	}
 	srv := &api.Server{Store: s, Auth: iss, Runtime: provider.NewMemory(), WebhookSecret: webhookSecret,
 		Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	if configure != nil {
+		configure(srv)
+	}
 	ts := httptest.NewServer(srv.Router())
 	t.Cleanup(ts.Close)
 	return ts.URL, testutil.Lookup(t, s, "acme-demo", "checkout-api", "staging"),
@@ -326,5 +336,50 @@ func TestCanaryWeightsAreValidatedAndStored(t *testing.T) {
 	want := "validate,apply_version,health_probe,canary_10,canary_50,promote"
 	if strings.Join(names, ",") != want {
 		t.Fatalf("steps = %v, want %v", names, want)
+	}
+}
+
+func TestGitHubWebhookReportsQueuedStatusImmediately(t *testing.T) {
+	type post struct{ Path, State string }
+	var mu sync.Mutex
+	var posts []post
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			State string `json:"state"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		posts = append(posts, post{r.URL.Path, body.State})
+		mu.Unlock()
+		w.WriteHeader(http.StatusCreated)
+	}))
+	t.Cleanup(gh.Close)
+	base, _, _ := newServerWith(t, func(s *api.Server) {
+		s.Statuses = &ghstatus.Reporter{Token: "test-token", BaseURL: gh.URL}
+	})
+	anon := client{t: t, base: base}
+	raw, _ := json.Marshal(map[string]any{
+		"deployment": map[string]any{"id": 4242, "ref": "v5.0.0", "sha": "0123456789abcdef", "environment": "staging"},
+		"repository": map[string]any{"full_name": "acme-demo/checkout-api"},
+	})
+	send := func() int {
+		code, _ := anon.do("POST", "/api/v1/webhooks/github", raw, map[string]string{
+			"X-GitHub-Event": "deployment", "X-GitHub-Delivery": "queued-1", "X-Hub-Signature-256": signed(raw)})
+		return code
+	}
+	if code := send(); code != http.StatusAccepted {
+		t.Fatalf("webhook: %d", code)
+	}
+	if code := send(); code != http.StatusOK {
+		t.Fatalf("redelivery: %d", code)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	want := []post{
+		{"/repos/acme-demo/checkout-api/statuses/0123456789abcdef", "pending"},
+		{"/repos/acme-demo/checkout-api/deployments/4242/statuses", "queued"},
+	}
+	if len(posts) != len(want) || posts[0] != want[0] || posts[1] != want[1] {
+		t.Fatalf("GitHub posts = %+v, want %+v (once, not again on redelivery)", posts, want)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -134,6 +135,10 @@ func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusAccepted
 	if !created {
 		status = http.StatusOK
+	} else {
+		// Report "queued" now: the worker only reports once it claims the job,
+		// which can be much later when the target is busy with another release.
+		s.reportGitHub(ctx, d, domain.DeploymentQueued, fmt.Sprintf("%s queued for %s", d.Version, d.EnvironmentSlug))
 	}
 	writeJSON(w, status, map[string]any{"status": "queued", "deployment_id": d.ID, "duplicate": !created})
 }
